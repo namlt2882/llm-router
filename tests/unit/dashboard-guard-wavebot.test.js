@@ -75,3 +75,25 @@ describe("WaveBot ticket mode guard", () => {
     expect(res).toBe(mocks.nextResponse);
   });
 });
+
+describe("requireLogin=false does not open a ticket-gated router", () => {
+  beforeEach(() => mocks.getSettings.mockResolvedValue({ requireLogin: false }));
+
+  it("still sends an unauthenticated /dashboard visit to /login in WaveBot mode", async () => {
+    vi.stubEnv("WAVEBOT_AUTH_URL", "http://wavebot.test");
+    const res = await proxy(request("/dashboard"));
+    expect(res.status).toBe(307);
+    expect(String(res.url)).toContain("/login");
+  });
+
+  it("still refuses an unauthenticated provider API call in WaveBot mode", async () => {
+    vi.stubEnv("WAVEBOT_AUTH_URL", "http://wavebot.test");
+    const res = await proxy(request("/api/providers"));
+    expect(res.status).toBe(401);
+  });
+
+  it("keeps stock behaviour outside WaveBot mode (the toggle still works)", async () => {
+    vi.stubEnv("WAVEBOT_AUTH_URL", "");
+    expect(await proxy(request("/dashboard"))).toBe(mocks.nextResponse);
+  });
+});

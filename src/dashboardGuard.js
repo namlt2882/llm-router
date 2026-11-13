@@ -187,10 +187,17 @@ async function loadSettings() {
   }
 }
 
+// Fork patch #2: with WAVEBOT_AUTH_URL set the ticket is the only door, so the
+// stock "require login" toggle must not be able to open the router.
+function loginOptional(settings) {
+  if ((process.env.WAVEBOT_AUTH_URL ?? "").trim()) return false;
+  return settings?.requireLogin === false;
+}
+
 async function isAuthenticated(request) {
   if (await hasValidToken(request)) return true;
   const settings = await loadSettings();
-  if (settings && settings.requireLogin === false) return true;
+  if (loginOptional(settings)) return true;
   return false;
 }
 
@@ -253,7 +260,7 @@ export async function proxy(request) {
     try {
       const settings = await loadSettings();
       if (settings) {
-        requireLogin = settings.requireLogin !== false;
+        requireLogin = !loginOptional(settings);
         tunnelDashboardAccess = settings.tunnelDashboardAccess === true;
 
         // Block tunnel/tailscale access if disabled (redirect to login)
