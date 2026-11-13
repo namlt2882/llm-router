@@ -81,3 +81,25 @@ tests/unit/token-refresh-generic.test.js :: refreshAccessToken — config-driven
 tests/unit/xai-oauth-service.test.js :: xai/oauth service exchanges dashboard codes against the discovered xAI token endpoint
 tests/unit/xai-oauth-service.test.js :: xai/oauth service generates dashboard auth data with CLIProxyAPI PKCE size and discovered endpoints
 tests/unit/xai-tokenRefresh.test.js :: xai/token-refresh wrapper refreshXaiToken module loads without throwing
+
+# Flaky/conditional tests at upstream 1855aa44 that surface on some runs
+# (environment: network, ffmpeg, timing). Union of 3 base runs, 2026-11-13.
+tests/unit/antigravity-quota-gemini-3.6.test.js :: Antigravity quota tracker: Gemini 3.6 Flash usage bars returns Gemini 3.6 Flash tier quotas so the dashboard can render usage bars
+tests/unit/antigravity-usage-headers.test.js :: Antigravity usage headers uses the official IDE user agent and omits router-only source headers
+tests/unit/background-token-refresh.test.js :: selectConnectionsNeedingRefresh selects oauth grok-cli connection expiring in 10 minutes
+tests/unit/claude-header-forwarding.test.js :: DefaultExecutor.buildHeaders() — claude provider uses static provider defaults when no model is given
+tests/unit/codex-reset-credits.test.js :: Codex reset credits returns normalized reset credit expiry details
+tests/unit/compatible-provider-connections.test.js :: compatible provider connections API creates one API-key connection for an Anthropic-compatible node
+tests/unit/compatible-provider-connections.test.js :: compatible provider connections API creates one API-key connection for an OpenAI-compatible node
+tests/unit/key-access-handlers.test.js :: /v1/models routes filter by key unrestricted sees the full catalog; restricted keys see only their entries
+tests/unit/kiro-external-idp.test.js :: Kiro external_idp (CLIProxyAPI) import and refresh rejects external_idp refresh endpoints outside Microsoft login
+tests/unit/minimax-transport-target-format.test.js :: MiniMax-M3 multi-transport routing keeps OpenAI image blocks on the matching OpenAI transport
+tests/unit/model-catalog-scope.test.js :: catalog schema asks upstream for a 304 once the file is current
+tests/unit/model-catalog-scope.test.js :: catalog schema rebuilds an older-schema file instead of trusting its etag
+tests/unit/model-test-routing.test.js :: model test route kind routing routes embedding model tests to /api/v1/embeddings
+tests/unit/model-test-routing.test.js :: model test route kind routing routes image model tests to /api/v1/images/generations
+tests/unit/provider-display-split.test.js :: provider display split (E1) AI_PROVIDERS entries still carry merged display + transport
+tests/unit/provider-test-models-routing.test.js :: provider test-models route kind routing routes huggingface image models to /api/v1/images/generations
+tests/unit/token-refresh-dispatch.test.js :: tokenRefresh dispatch getAccessToken returns null for missing/invalid refreshToken
+tests/unit/xai-oauth-service.test.js :: xai/oauth service discovers endpoints without custom user-agent headers
+tests/unit/xai-oauth-service.test.js :: xai/oauth service validates discovered endpoints are https x.ai URLs
