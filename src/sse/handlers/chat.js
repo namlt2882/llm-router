@@ -27,6 +27,8 @@ import { updateProviderCredentials, checkAndRefreshToken } from "../services/tok
 import { getProjectIdForConnection } from "open-sse/services/projectId.js";
 import { stripModelContextMarker } from "open-sse/utils/modelMarkers.js";
 import { getKeyAccessContext, enforceKeyAccess, filterAdapterModels } from "../services/keyAccess.js";
+// Fork patch #4: re-pin a conversation to the account that just served it.
+import { pinSession } from "../services/sessionPin.js";
 import { resolveSmartChoice } from "../services/systemoneRouter.js";
 
 /**
@@ -127,7 +129,7 @@ export async function handleChat(request, clientRawRequest = null) {
             const { tools, tool_choice, ...cleanBody } = clientRawRequest.body || {};
             cleanRawReq = { ...clientRawRequest, body: cleanBody };
           }
-          return handleSingleModelChat(b, m, cleanRawReq, request, apiKey);
+          return handleSingleModelChat(b, m, cleanRawReq, request, apiKey, null, sessionId);
         },
         log,
         comboName: modelStr,
@@ -143,7 +145,7 @@ export async function handleChat(request, clientRawRequest = null) {
       body,
       models: augmentedModels,
       handleSingleModel: withCapacityAdapterStripping(
-        (b, m) => handleSingleModelChat(b, m, clientRawRequest, request, apiKey),
+        (b, m) => handleSingleModelChat(b, m, clientRawRequest, request, apiKey, null, sessionId),
         adapterAdded
       ),
       log,
@@ -175,7 +177,7 @@ export async function handleChat(request, clientRawRequest = null) {
       body,
       models: soloAugmented,
       handleSingleModel: withCapacityAdapterStripping(
-        (b, m) => handleSingleModelChat(b, m, clientRawRequest, request, apiKey),
+        (b, m) => handleSingleModelChat(b, m, clientRawRequest, request, apiKey, null, sessionId),
         adapterAdded
       ),
       log,
@@ -184,13 +186,13 @@ export async function handleChat(request, clientRawRequest = null) {
     });
   }
 
-  return handleSingleModelChat(body, modelStr, clientRawRequest, request, apiKey, contextMarker ? `${modelStr.slice(modelStr.indexOf("/") + 1)}[${contextMarker}]` : null);
+  return handleSingleModelChat(body, modelStr, clientRawRequest, request, apiKey, contextMarker ? `${modelStr.slice(modelStr.indexOf("/") + 1)}[${contextMarker}]` : null, sessionId);
 }
 
 /**
  * Handle single model chat request
  */
-async function handleSingleModelChat(body, modelStr, clientRawRequest = null, request = null, apiKey = null, requestedModel = null) {
+async function handleSingleModelChat(body, modelStr, clientRawRequest = null, request = null, apiKey = null, requestedModel = null, sessionId = null) {
   const modelInfo = await getModelInfo(modelStr);
 
   // If provider is null, this might be a combo name - check and handle
@@ -220,7 +222,7 @@ async function handleSingleModelChat(body, modelStr, clientRawRequest = null, re
               const { tools, tool_choice, ...cleanBody } = clientRawRequest.body || {};
               cleanRawReq = { ...clientRawRequest, body: cleanBody };
             }
-            return handleSingleModelChat(b, m, cleanRawReq, request, apiKey);
+            return handleSingleModelChat(b, m, cleanRawReq, request, apiKey, null, sessionId);
           },
           log,
           comboName: modelStr,
@@ -238,7 +240,7 @@ async function handleSingleModelChat(body, modelStr, clientRawRequest = null, re
         body,
         models: augmentedModels,
         handleSingleModel: withCapacityAdapterStripping(
-          (b, m) => handleSingleModelChat(b, m, clientRawRequest, request, apiKey),
+          (b, m) => handleSingleModelChat(b, m, clientRawRequest, request, apiKey, null, sessionId),
           adapterAdded
         ),
         log,
@@ -277,7 +279,11 @@ async function handleSingleModelChat(body, modelStr, clientRawRequest = null, re
   let lastHeaders = null;
 
   while (true) {
-    const credentials = await getProviderCredentials(provider, excludeConnectionIds, model, { requestedModel: requestedModel || model });
+    const credentials = await getProviderCredentials(provider, excludeConnectionIds, model, {
+      requestedModel: requestedModel || model,
+      // Fork patch #4: keep this conversation on one account while it is up.
+      sessionId,
+    });
 
     // All accounts unavailable
     if (!credentials || credentials.allRateLimited) {
@@ -351,6 +357,9 @@ async function handleSingleModelChat(body, modelStr, clientRawRequest = null, re
         });
       },
       onRequestSuccess: async () => {
+        // Fork patch #4: the account that just succeeded becomes this
+        // conversation's affinity target for the next turn.
+        if (sessionId) pinSession(provider, sessionId, credentials.connectionId);
         await clearAccountError(credentials.connectionId, credentials, model);
         // "Consecutive" strikes: a success clears the breaker for this pair.
         clearAntigravityStrikes(credentials.connectionId, model);

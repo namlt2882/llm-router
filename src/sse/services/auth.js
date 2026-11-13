@@ -4,6 +4,8 @@ import { formatRetryAfter, checkFallbackError, isModelLockActive, buildModelLock
 import { MAX_RATE_LIMIT_COOLDOWN_MS } from "open-sse/config/errorConfig.js";
 import { resolveProviderId, FREE_PROVIDERS } from "@/shared/constants/providers.js";
 import { getAntigravityQuotaCache, getAntigravityModelQuota } from "./antigravityQuota.js";
+// Fork patch #4: session → account affinity (see sessionPin.js).
+import { getPinnedConnectionId } from "./sessionPin.js";
 import * as log from "../utils/logger.js";
 
 // Mutex to prevent race conditions during account selection
@@ -32,6 +34,8 @@ export async function getProviderCredentials(provider, excludeConnectionIds = nu
     : (excludeConnectionIds ? new Set([excludeConnectionIds]) : new Set());
   const preferredConnectionId = options?.preferredConnectionId || null;
   const requestedModel = options?.requestedModel || model;
+  // Fork patch #4: the conversation identity, when the caller resolved one.
+  const sessionId = options?.sessionId || null;
   // Acquire mutex to prevent race conditions
   const currentMutex = selectionMutex;
   let resolveMutex;
@@ -151,6 +155,22 @@ export async function getProviderCredentials(provider, excludeConnectionIds = nu
       connection = availableConnections.find((c) => c.id === preferredConnectionId);
       if (connection) {
         log.info("AUTH", `${provider} | pinned to ${connection.id?.slice(0, 8)} (${connection.name || connection.email || "unnamed"})`);
+      }
+    }
+    // Fork patch #4: otherwise keep a conversation on the account that last
+    // served it — prompt-cache affinity. Looked up in the ALREADY-FILTERED set,
+    // so a locked/unavailable pin falls through to the normal strategy instead
+    // of being honoured.
+    if (!connection && sessionId) {
+      const pinnedId = getPinnedConnectionId(providerId, sessionId);
+      if (pinnedId) {
+        const pinned = availableConnections.find((c) => c.id === pinnedId);
+        if (pinned) {
+          connection = pinned;
+          log.info("AUTH", `${provider} | session pin ${pinned.id?.slice(0, 8)} (${pinned.name || pinned.email || "unnamed"}) for ${sessionId}`);
+        } else {
+          log.info("AUTH", `${provider} | session pin ${pinnedId?.slice(0, 8)} unavailable for ${sessionId}, rotating`);
+        }
       }
     }
     if (connection) {

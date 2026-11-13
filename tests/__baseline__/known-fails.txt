@@ -103,3 +103,30 @@ tests/unit/provider-test-models-routing.test.js :: provider test-models route ki
 tests/unit/token-refresh-dispatch.test.js :: tokenRefresh dispatch getAccessToken returns null for missing/invalid refreshToken
 tests/unit/xai-oauth-service.test.js :: xai/oauth service discovers endpoints without custom user-agent headers
 tests/unit/xai-oauth-service.test.js :: xai/oauth service validates discovered endpoints are https x.ai URLs
+
+# Tests that fail nondeterministically under full-suite load at this fork
+# (pass in isolation; upstream master state, not a WaveBot patch).
+tests/unit/anthropic-gateway-passthrough.test.js :: DefaultExecutor.buildHeaders() forwards client anthropic-beta keeps unknown client flags alongside the pinned set on claude
+tests/unit/antigravity-quota-gemini-3.6.test.js :: Antigravity quota tracker: Gemini 3.6 Flash usage bars still filters out internal and non-important models
+tests/unit/background-token-refresh.test.js :: selectConnectionsNeedingRefresh never selects apikey connections
+tests/unit/background-token-refresh.test.js :: selectConnectionsNeedingRefresh skips connection expiring in 2 hours
+tests/unit/bedrock-provider-api-secrets.test.js :: Bedrock connection API secrets does not return a bedrock session token from create, list, detail, or update
+tests/unit/codex-refresh-token.test.js :: Codex Refresh Token CodexExecutor credential lifecycle should refresh Codex when lastRefreshAt is older than the upstream stale window
+tests/unit/codex-reset-credits.test.js :: Codex reset credits surfaces structured upstream errors as readable messages
+tests/unit/compatible-provider-connections.test.js :: compatible provider connections API allows multiple connections on the same compatible node
+tests/unit/force-stream-config.test.js :: forceStream provider config keeps forced-stream providers streaming for JSON clients when body.stream is false
+tests/unit/force-stream-config.test.js :: forceStream provider config keeps forced-stream providers streaming for JSON clients when body.stream is undefined
+tests/unit/grok-cli-expiresat-2546.test.js :: Grok CLI (xAI) token expiry propagation (#2546) proactive refresh does NOT fire for a far-future grok-cli token
+tests/unit/kiro-external-idp.test.js :: Kiro external_idp (CLIProxyAPI) import and refresh adds CodeWhisperer external IdP headers and endpoint ordering
+tests/unit/model-routing.test.js :: model routing still routes non-reserved compatible node prefixes
+tests/unit/model-test-routing.test.js :: model test route kind routing fails embedding model tests when provider returns no embedding data
+tests/unit/model-test-routing.test.js :: model test route kind routing routes stt model tests to /api/v1/audio/transcriptions
+tests/unit/provider-display-split.test.js :: provider display split (E1) display fields source from providersDisplay.js
+tests/unit/provider-display-split.test.js :: provider display split (E1) helpers still work after split
+tests/unit/proxy-keepalive-dead-socket.test.js :: undici keep-alive dead-socket protection & fresh-socket retry DefaultExecutor.transformRequest strips stream_options on non-streaming calls without mutating input body
+tests/unit/token-refresh-dispatch.test.js :: tokenRefresh dispatch getAccessToken default: unsupported provider → null
+tests/unit/token-refresh-dispatch.test.js :: tokenRefresh dispatch refreshTokenByProvider returns null without refreshToken
+tests/unit/usage-dispatch.test.js :: usage dispatch unsupported provider → not-implemented message
+tests/unit/xai-oauth-service.test.js :: xai/oauth service builds authorize URLs with CLIProxyAPI query extras
+tests/unit/xai-tokenRefresh.test.js :: xai/token-refresh wrapper formatProviderCredentials returns Bearer-shape for xai
+tests/unit/xai-tokenRefresh.test.js :: xai/token-refresh wrapper refreshTokenByProvider returns null when refreshToken missing
