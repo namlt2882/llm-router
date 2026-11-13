@@ -10,6 +10,7 @@ import { PROVIDER_MODELS } from "@/shared/constants/models";
 import { GEMINI_NATIVE_TTS_FETCH_TIMEOUT_MS } from "open-sse/config/runtimeConfig.js";
 import { initTranslators } from "open-sse/translator/index.js";
 import { getKeyAccessContext, enforceKeyAccessResolved } from "@/sse/services/keyAccess.js";
+import { releaseAccountSlot, releaseSlotWithBody } from "@/sse/services/accountInflight.js";
 
 let initialized = false;
 const GEMINI_NATIVE_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/models";
@@ -266,6 +267,7 @@ async function forwardGeminiNativeRequest(request, body, model, action) {
 
     const authHeaders = buildGeminiNativeAuthHeaders(credentials);
     if (!authHeaders) {
+      releaseAccountSlot(credentials.connectionId);
       return Response.json(
         { error: { message: "No Gemini API key configured" } },
         { status: 404 }
@@ -285,6 +287,7 @@ async function forwardGeminiNativeRequest(request, body, model, action) {
 
     if (request.signal?.aborted) {
       console.log(`[GEMINI_NATIVE] client aborted model=${modelId} ms=0 conn=${safeConnection}`);
+      releaseAccountSlot(credentials.connectionId);
       return Response.json({ error: { message: "Client closed request" } }, { status: 499 });
     }
 
@@ -306,6 +309,7 @@ async function forwardGeminiNativeRequest(request, body, model, action) {
       const durationMs = Date.now() - startedAt;
       if (request.signal?.aborted && !timedOut) {
         console.log(`[GEMINI_NATIVE] client aborted model=${modelId} ms=${durationMs} conn=${safeConnection}`);
+        releaseAccountSlot(credentials.connectionId);
         return Response.json({ error: { message: "Client closed request" } }, { status: 499 });
       }
 
@@ -321,6 +325,7 @@ async function forwardGeminiNativeRequest(request, body, model, action) {
         modelId
       );
 
+      releaseAccountSlot(credentials.connectionId);
       if (shouldFallback) {
         excludeConnectionIds.add(credentials.connectionId);
         lastError = errorText;
@@ -339,11 +344,11 @@ async function forwardGeminiNativeRequest(request, body, model, action) {
 
     if (upstreamResponse.ok) {
       await clearAccountError(credentials.connectionId, credentials, modelId);
-      return new Response(upstreamResponse.body, {
+      return releaseSlotWithBody(new Response(upstreamResponse.body, {
         status: upstreamResponse.status,
         statusText: upstreamResponse.statusText,
         headers: corsHeadersFrom(upstreamResponse),
-      });
+      }), credentials.connectionId);
     }
 
     const errorText = await upstreamResponse.text();
@@ -355,6 +360,7 @@ async function forwardGeminiNativeRequest(request, body, model, action) {
       modelId
     );
 
+    releaseAccountSlot(credentials.connectionId);
     if (shouldFallback) {
       excludeConnectionIds.add(credentials.connectionId);
       lastError = errorText;

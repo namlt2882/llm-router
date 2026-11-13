@@ -10,6 +10,7 @@ import { errorResponse, unavailableResponse } from "open-sse/utils/error.js";
 import { HTTP_STATUS } from "open-sse/config/runtimeConfig.js";
 import { AI_PROVIDERS } from "@/shared/constants/providers";
 import { handleComboChat } from "open-sse/services/combo.js";
+import { releaseAccountSlot } from "../services/accountInflight.js";
 import * as log from "../utils/logger.js";
 
 // Derived from providers.js: any TTS provider not noAuth requires stored credentials
@@ -111,17 +112,24 @@ async function handleSingleModelTts(body, modelStr, responseFormat, language, st
 
     log.info("AUTH", `\x1b[32mUsing ${provider} account: ${credentials.connectionName}\x1b[0m`);
 
-    const result = await handleTtsCore({ provider, model, input: body.input, credentials, responseFormat, language, style });
+    // Fork patch #5: the slot was taken inside getProviderCredentials, and
+    // only the chat path used to give it back. TTS never streams, so the whole
+    // attempt finishes here — release whatever this iteration's outcome is.
+    try {
+      const result = await handleTtsCore({ provider, model, input: body.input, credentials, responseFormat, language, style });
 
-    if (result.success) return result.response;
+      if (result.success) return result.response;
 
-    const { shouldFallback } = await markAccountUnavailable(credentials.connectionId, result.status, result.error, provider, model);
-    if (shouldFallback) {
-      excludeConnectionIds.add(credentials.connectionId);
-      lastError = result.error;
-      lastStatus = result.status;
-      continue;
+      const { shouldFallback } = await markAccountUnavailable(credentials.connectionId, result.status, result.error, provider, model);
+      if (shouldFallback) {
+        excludeConnectionIds.add(credentials.connectionId);
+        lastError = result.error;
+        lastStatus = result.status;
+        continue;
+      }
+      return result.response || errorResponse(result.status, result.error);
+    } finally {
+      releaseAccountSlot(credentials.connectionId);
     }
-    return result.response || errorResponse(result.status, result.error);
   }
 }

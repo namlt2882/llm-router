@@ -2,6 +2,7 @@ import { getModelInfo } from "../services/model.js";
 import { getProviderCredentials } from "../services/auth.js";
 import { checkAndRefreshToken } from "../services/tokenRefresh.js";
 import { handleSystemoneCore } from "open-sse/handlers/systemoneCore.js";
+import { releaseAccountSlot } from "./accountInflight.js";
 import {
   DEFAULT_SYSTEMONE_ROUTER_MODEL,
   DEFAULT_SYSTEMONE_TIMEOUT_MS,
@@ -80,6 +81,10 @@ export async function resolveSmartChoice({
       timeoutId = setTimeout(() => reject(new Error(`System One router timed out after ${timeoutMs}ms`)), timeoutMs);
     });
 
+    // Fork patch #5: getProviderCredentials took a slot. The evaluation is a
+    // single non-streaming call, and this function owns it whether it finishes
+    // or loses the race to the timeout — a leaked slot here would quietly
+    // wedge the router model's whole account.
     const corePromise = handleSystemoneCore({
       body: systemoneBody,
       modelInfo: { provider, model },
@@ -93,6 +98,7 @@ export async function resolveSmartChoice({
       result = await Promise.race([corePromise, timeoutPromise]);
     } finally {
       clearTimeout(timeoutId);
+      releaseAccountSlot(credentials.connectionId);
     }
 
     if (!result?.success || !result.response) {

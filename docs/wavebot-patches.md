@@ -39,6 +39,8 @@ upstream master is not green on a plain checkout.
 | 8 | Container image on `node:24-alpine` | `Dockerfile`, `.github/workflows/docker.yml` | `node:sqlite` needs Node ≥22.5; the runner must carry `pg`, so it copies the built `node_modules` instead of an upstream file list. |
 | 9 | Ticket redirects on the client's origin | `src/lib/auth/ticketOrigin.js`, `src/app/dashboard/auth/ticket/route.js` | `request.url` carries the bind address (`0.0.0.0`), so a successful login redirected to `http://0.0.0.0:20128/dashboard`. Builds the target from `Host` (+`x-forwarded-proto`). |
 | 10 | Mirror column reconciliation is case-folded | `src/lib/db/adapters/postgresAdapter.js` | Postgres lowercases unquoted columns, so the second boot re-added every camelCase column and the whole DB layer failed with `42701`. |
+| 11 | Every slot acquirer releases it | `src/sse/handlers/{tts,stt,embeddings,search,fetch,systemone,videoGeneration,imageGeneration}.js`, `src/sse/services/systemoneRouter.js`, `src/app/api/v1beta/models/[...path]/route.js`, `open-sse/handlers/chatCore.js`, `src/sse/services/accountInflight.js` | Patch #5 takes the slot inside `getProviderCredentials` for EVERY caller, but only the chat path released it: four image/TTS/search calls wedged an account into `account_busy` for the whole 10-minute TTL. Pinned by `tests/unit/nonchat-slot-release.test.js` (a module that acquires must release) and `tests/unit/nonchat-slot-behaviour.test.js`. When the RESPONSE IS A LIVE STREAM (codex image generation, the Gemini-native proxy) the release must follow the body, not the return: `releaseSlotWithBody` wraps it and frees the account on end/error/cancel — a `finally` released before the client read a byte, so four parallel streams looked like one in flight. Pinned by `tests/unit/slot-release-with-body.test.js` and `tests/unit/image-slot-streaming.test.js`. |
+| 12 | Journal truncates only what was confirmed | `src/lib/db/adapters/postgresAdapter.js`, `src/lib/db/postgresJournal.js` | `flushOnce` truncated the WHOLE journal after awaiting Postgres, deleting the durable copy of any write that arrived mid-flush — one already acknowledged to its caller. Rewrite with the still-unconfirmed groups instead. A group also now runs BEGIN/COMMIT on ONE pooled connection: `pool.query` checks out per call, so a group could commit statement-by-statement and be dropped from the journal as if it were atomic. |
 
 ## Runtime environment (fork-specific)
 
@@ -66,6 +68,15 @@ upstream master is not green on a plain checkout.
   logs `session pin <conn> (…) for conv:…`; `/v1` without a key → `401`; an
   injected journal group reached Postgres after `docker kill` + start and the
   journal truncated to 0 bytes.
+- Durability (2026-11-13): `postgres-adapter` covers a write arriving DURING
+  a flush (its journal line survives) and a group's BEGIN/COMMIT/RELEASE on one
+  connection.
+- Slot release (2026-11-13): `nonchat-slot-release` (11 acquirers, each also
+  releases) and `nonchat-slot-behaviour` (the real TTS handler leaves the
+  semaphore at zero on success, on a terminal failure and on a throw).
+  Streaming results: `slot-release-with-body` (held until read, freed on
+  cancel, immediate when bodiless) and `image-slot-streaming` (the real image
+  handler holds an SSE body and frees it once consumed).
 - Image: built locally from this Dockerfile; `/api/health` returns `{"ok":true}`,
   `/login` is 200, the log shows `[DB] Driver: postgres (mirror) | sqlite: memory`
   and `[DB][migrate] applied #1 initial`, and `_meta.schemaVersion=1` lands in the

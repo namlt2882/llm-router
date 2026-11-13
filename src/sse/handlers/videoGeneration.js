@@ -14,6 +14,7 @@ import { HTTP_STATUS } from "open-sse/config/runtimeConfig.js";
 import { updateProviderCredentials, checkAndRefreshToken } from "../services/tokenRefresh.js";
 
 const NO_AUTH_VIDEO_PROVIDERS = new Set(["veoaifree-web"]);
+import { releaseAccountSlot } from "../services/accountInflight.js";
 import * as log from "../utils/logger.js";
 
 // Video generation is xAI-only today; requests without a provider prefix
@@ -174,26 +175,33 @@ export async function handleVideoCreate(request, action) {
 
     const refreshedCredentials = await checkAndRefreshToken(provider, credentials);
 
-    const result = await handleVideoProxyCore({
-      provider,
-      action,
-      rawBody: forwardBody,
-      contentType: bodyInfo.contentType || null,
-      idempotencyKey,
-      credentials: refreshedCredentials,
-      signal: request.signal,
-      log,
-      onCredentialsRefreshed: async (newCreds) => {
-        await updateProviderCredentials(credentials.connectionId, {
-          accessToken: newCreds.accessToken,
-          refreshToken: newCreds.refreshToken,
-          // Executor-driven web providers rotate their cookie credential in place.
-          apiKey: newCreds.apiKey,
-          providerSpecificData: newCreds.providerSpecificData,
-          testStatus: "active",
-        });
-      },
-    });
+    // Fork patch #5: the slot came from getProviderCredentials. Video submits a
+    // job and returns; nothing here streams, so the attempt owns it.
+    let result;
+    try {
+      result = await handleVideoProxyCore({
+        provider,
+        action,
+        rawBody: forwardBody,
+        contentType: bodyInfo.contentType || null,
+        idempotencyKey,
+        credentials: refreshedCredentials,
+        signal: request.signal,
+        log,
+        onCredentialsRefreshed: async (newCreds) => {
+          await updateProviderCredentials(credentials.connectionId, {
+            accessToken: newCreds.accessToken,
+            refreshToken: newCreds.refreshToken,
+            // Executor-driven web providers rotate their cookie credential in place.
+            apiKey: newCreds.apiKey,
+            providerSpecificData: newCreds.providerSpecificData,
+            testStatus: "active",
+          });
+        },
+      });
+    } finally {
+      releaseAccountSlot(credentials.connectionId);
+    }
 
     if (result.success) {
       await clearAccountError(credentials.connectionId, credentials, model);

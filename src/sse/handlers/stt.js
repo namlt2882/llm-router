@@ -9,6 +9,7 @@ import { handleSttCore } from "open-sse/handlers/sttCore.js";
 import { errorResponse, unavailableResponse } from "open-sse/utils/error.js";
 import { HTTP_STATUS } from "open-sse/config/runtimeConfig.js";
 import { AI_PROVIDERS } from "@/shared/constants/providers";
+import { releaseAccountSlot } from "../services/accountInflight.js";
 import * as log from "../utils/logger.js";
 import { checkAndRefreshToken } from "../services/tokenRefresh.js";
 import { resolveConnectionProxyConfig } from "@/lib/network/connectionProxy.js";
@@ -100,6 +101,10 @@ export async function handleStt(request) {
 
     log.info("AUTH", `\x1b[32mUsing ${provider} account: ${credentials.connectionName}\x1b[0m`);
 
+    // Fork patch #5: the slot came from getProviderCredentials. It is keyed by
+    // the ACQUIRED connection, so capture it before any credential refresh can
+    // replace the object; STT never streams, so this attempt owns it.
+    const acquiredConnectionId = credentials.connectionId;
     let result;
     try {
       const isCodex = provider === "codex";
@@ -120,6 +125,8 @@ export async function handleStt(request) {
       }
     } catch {
       return errorResponse(HTTP_STATUS.BAD_GATEWAY, "STT credential or transport failure");
+    } finally {
+      releaseAccountSlot(acquiredConnectionId);
     }
 
     if (request.signal.aborted) return errorResponse(504, "Transcription cancelled");

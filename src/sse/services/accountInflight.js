@@ -64,6 +64,54 @@ export function releaseAccountSlot(connectionId) {
   slots.set(connectionId, { count: entry.count - 1, expiresAt: entry.expiresAt });
 }
 
+/**
+ * Wrap a Response whose body is still being streamed, releasing the slot when
+ * the body ends, errors or is cancelled.
+ *
+ * Some handlers return the live upstream stream (codex image generation, the
+ * Gemini-native proxy). Releasing at return would free the account while the
+ * transfer is still in flight, which is the over-count this semaphore exists
+ * to prevent. A bodiless response releases immediately.
+ */
+export function releaseSlotWithBody(response, connectionId) {
+  if (!response.body) {
+    releaseAccountSlot(connectionId);
+    return response;
+  }
+  const reader = response.body.getReader();
+  let released = false;
+  const release = () => {
+    if (released) return;
+    released = true;
+    releaseAccountSlot(connectionId);
+  };
+  const stream = new ReadableStream({
+    async pull(controller) {
+      try {
+        const { done, value } = await reader.read();
+        if (done) {
+          release();
+          controller.close();
+          return;
+        }
+        controller.enqueue(value);
+      } catch (err) {
+        release();
+        controller.error(err);
+      }
+    },
+    cancel(reason) {
+      release();
+      return reader.cancel(reason);
+    },
+  });
+  return new Response(stream, {
+    status: response.status,
+    statusText: response.statusText,
+    headers: response.headers,
+  });
+}
+
 /** Test-only. */
 export function __resetAccountInflight() {
   slots.clear();

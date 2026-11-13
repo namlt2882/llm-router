@@ -10,6 +10,7 @@ import { AI_PROVIDERS, resolveProviderId } from "@/shared/constants/providers.js
 import { handleSearchCore } from "open-sse/handlers/search/index.js";
 import { errorResponse, unavailableResponse } from "open-sse/utils/error.js";
 import { HTTP_STATUS } from "open-sse/config/runtimeConfig.js";
+import { releaseAccountSlot } from "../services/accountInflight.js";
 import * as log from "../utils/logger.js";
 import { updateProviderCredentials, checkAndRefreshToken } from "../services/tokenRefresh.js";
 import { handleComboChat, getComboModelsFromData } from "open-sse/services/combo.js";
@@ -201,24 +202,31 @@ async function handleSingleProviderSearch(body, providerInput, request, apiKey, 
 
     const refreshedCredentials = await checkAndRefreshToken(providerId, credentials);
 
-    const result = await handleSearchCore({
-      body: coreBody,
-      provider: resolvedProvider,
-      providerConfig,
-      credentials: refreshedCredentials,
-      log,
-      onCredentialsRefreshed: async (newCreds) => {
-        await updateProviderCredentials(credentials.connectionId, {
-          accessToken: newCreds.accessToken,
-          refreshToken: newCreds.refreshToken,
-          providerSpecificData: newCreds.providerSpecificData,
-          testStatus: "active"
-        });
-      },
-      onRequestSuccess: async () => {
-        await clearAccountError(credentials.connectionId, credentials);
-      }
-    });
+    // Fork patch #5: the slot came from getProviderCredentials and search never
+    // streams, so this attempt owns it from acquire to return.
+    let result;
+    try {
+      result = await handleSearchCore({
+        body: coreBody,
+        provider: resolvedProvider,
+        providerConfig,
+        credentials: refreshedCredentials,
+        log,
+        onCredentialsRefreshed: async (newCreds) => {
+          await updateProviderCredentials(credentials.connectionId, {
+            accessToken: newCreds.accessToken,
+            refreshToken: newCreds.refreshToken,
+            providerSpecificData: newCreds.providerSpecificData,
+            testStatus: "active"
+          });
+        },
+        onRequestSuccess: async () => {
+          await clearAccountError(credentials.connectionId, credentials);
+        }
+      });
+    } finally {
+      releaseAccountSlot(credentials.connectionId);
+    }
 
     if (result.success) return result.response;
 

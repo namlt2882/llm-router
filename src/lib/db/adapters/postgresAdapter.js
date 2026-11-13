@@ -160,7 +160,12 @@ export async function createPostgresAdapter({ connectionString, dataDir, client,
     pending = [];
     try {
       for (const group of batch) await runGroup(pgClient, group);
-      journal.truncate();
+      // Truncate only the PREFIX that was just confirmed. Draining the whole
+      // file was a data-loss window: a write that arrived while this flush was
+      // awaiting Postgres is already in `pending` (and already acknowledged to
+      // its caller), and a whole-file truncate would delete its only durable
+      // copy. Rewrite the remainder instead.
+      journal.rewrite(pending);
     } catch (err) {
       pending = [...batch, ...pending];
       throw err;
@@ -273,14 +278,32 @@ export async function createPostgresAdapter({ connectionString, dataDir, client,
   };
 }
 
+/**
+ * Run one write group as ONE transaction.
+ *
+ * A group must be all-or-nothing: the journal treats it as the unit of
+ * durability, and `flushOnce` drops it once Postgres has it. `pool.query`
+ * checks out an arbitrary connection per call, so BEGIN and COMMIT issued that
+ * way can land on different sessions — Postgres then either rejects the
+ * COMMIT or, worse, the statements commit one-per-connection with no
+ * transaction at all. The surviving statements are then dropped from the
+ * journal as if the group had been applied whole, and Postgres is permanently
+ * behind memory. So a pool gets a dedicated connection for the group.
+ */
 async function runGroup(client, group) {
-  await client.query("BEGIN");
+  let session = client;
+  if (typeof client.connect === "function") session = await client.connect();
   try {
-    for (const { sql, params } of group) await client.query(sql, params);
-    await client.query("COMMIT");
-  } catch (err) {
-    try { await client.query("ROLLBACK"); } catch { /* connection already dead */ }
-    throw err;
+    await session.query("BEGIN");
+    try {
+      for (const { sql, params } of group) await session.query(sql, params);
+      await session.query("COMMIT");
+    } catch (err) {
+      try { await session.query("ROLLBACK"); } catch { /* connection already dead */ }
+      throw err;
+    }
+  } finally {
+    if (session !== client && typeof session.release === "function") session.release();
   }
 }
 

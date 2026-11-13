@@ -11,6 +11,7 @@ import { getKeyAccessContext, enforceKeyAccessResolved } from "../services/keyAc
 import { handleEmbeddingsCore } from "open-sse/handlers/embeddingsCore.js";
 import { errorResponse, unavailableResponse } from "open-sse/utils/error.js";
 import { HTTP_STATUS } from "open-sse/config/runtimeConfig.js";
+import { releaseAccountSlot } from "../services/accountInflight.js";
 import * as log from "../utils/logger.js";
 import { updateProviderCredentials, checkAndRefreshToken } from "../services/tokenRefresh.js";
 import { saveRequestUsage } from "@/lib/usageDb.js";
@@ -122,22 +123,29 @@ export async function handleEmbeddings(request) {
 
     const refreshedCredentials = await checkAndRefreshToken(provider, credentials);
 
-    const result = await handleEmbeddingsCore({
-      body: { ...body, model: `${provider}/${model}` },
-      modelInfo: { provider, model },
-      credentials: refreshedCredentials,
-      log,
-      onCredentialsRefreshed: async (newCreds) => {
-        await updateProviderCredentials(credentials.connectionId, {
-          ...newCreds,
-          existingProviderSpecificData: credentials.providerSpecificData,
-          testStatus: "active"
-        });
-      },
-      onRequestSuccess: async () => {
-        await clearAccountError(credentials.connectionId, credentials, model);
-      }
-    });
+    // Fork patch #5: getProviderCredentials took a per-account in-flight slot;
+    // this handler never streams, so this attempt owns it start to finish.
+    let result;
+    try {
+      result = await handleEmbeddingsCore({
+        body: { ...body, model: `${provider}/${model}` },
+        modelInfo: { provider, model },
+        credentials: refreshedCredentials,
+        log,
+        onCredentialsRefreshed: async (newCreds) => {
+          await updateProviderCredentials(credentials.connectionId, {
+            ...newCreds,
+            existingProviderSpecificData: credentials.providerSpecificData,
+            testStatus: "active"
+          });
+        },
+        onRequestSuccess: async () => {
+          await clearAccountError(credentials.connectionId, credentials, model);
+        }
+      });
+    } finally {
+      releaseAccountSlot(credentials.connectionId);
+    }
 
     if (result.success) {
       const usage = exactEmbeddingUsage(result.usage);

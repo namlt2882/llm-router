@@ -162,3 +162,109 @@ describe("postgres adapter mirror schema reconciliation", () => {
     expect(alters.every((sql) => / ADD COLUMN /.test(sql))).toBe(true);
   });
 });
+
+describe("postgres adapter durability under concurrency", () => {
+  /** A client that holds the FIRST write group open so a second arrives mid-flush. */
+  function gatedClient(initial, journalPath) {
+    const tables = structuredClone(initial);
+    let releaseGate;
+    const gate = new Promise((r) => { releaseGate = r; });
+    const queries = [];
+    const seen = { began: 0, journalAtSecondBegin: null, inGate: null };
+    let inserts = 0;
+    return {
+      tables, queries, seen, release: () => releaseGate(),
+      async query(sql, params = []) {
+        queries.push([sql, params]);
+        if (/^BEGIN$/.test(sql.trim())) {
+          seen.began += 1;
+          // Second group's transaction: the first flush has already rewritten
+          // the journal with whatever it had NOT confirmed. b must still be there.
+          if (seen.began === 2) seen.journalAtSecondBegin = readJournal(journalPath);
+        }
+        if (/^SELECT \* FROM ([A-Za-z_]\w*)/.test(sql)) {
+          return { rows: tables[sql.match(/^SELECT \* FROM ([A-Za-z_]\w*)/)[1]] ?? [] };
+        }
+        if (/information_schema\.columns/.test(sql)) return { rows: [] };
+        if (/^INSERT INTO kv/.test(sql) && ++inserts === 1) {
+          seen.inGate = new Promise((r) => { seen.gateReached = r; });
+          await gate; // hold only the first group open
+        }
+        return { rows: [] };
+      },
+    };
+  }
+
+  it("keeps a group journaled while another flush is in flight", async () => {
+    // The confirmed batch used to be dropped with a WHOLE-FILE truncate, so a
+    // write that arrived while a flush awaited Postgres lost its durable copy
+    // even though it was already acknowledged to the caller — the one guarantee
+    // the mirror makes ("a crash loses nothing that was acknowledged").
+    const dataDir = dir();
+    const journalPath = join(dataDir, "journal.jsonl");
+    const client = gatedClient(tables(), journalPath);
+    adapter = await createPostgresAdapter({ connectionString: "postgres://x", dataDir, client, journalPath });
+
+    adapter.run("INSERT OR REPLACE INTO kv(scope, key, value) VALUES(?, ?, ?)", ["s", "a", "1"]);
+    const flushing = adapter.flushNow();
+    // Wait until the first group is genuinely in flight, then write the second.
+    while (!client.seen.gateReached) await new Promise((r) => setTimeout(r, 1));
+    adapter.run("INSERT OR REPLACE INTO kv(scope, key, value) VALUES(?, ?, ?)", ["s", "b", "2"]);
+    client.release();
+    await flushing;
+
+    // At the second group's BEGIN, the journal held exactly the unconfirmed
+    // group: the acknowledged write that arrived mid-flush was never dropped.
+    expect(client.seen.journalAtSecondBegin).toEqual([[
+      {
+        sql: "INSERT INTO kv(scope, key, value) VALUES($1, $2, $3) ON CONFLICT (scope, key) DO UPDATE SET value = excluded.value",
+        params: ["s", "b", "2"],
+      },
+    ]]);
+    // ...and once that group is confirmed too, the journal is empty.
+    expect(readJournal(journalPath)).toEqual([]);
+  });
+
+  it("runs a group's BEGIN/COMMIT on one connection, never across a pool", async () => {
+    // `pool.query` checks out an arbitrary connection per call, so BEGIN and
+    // COMMIT can land on different sessions: the group either fails to commit
+    // as a unit or commits statement-by-statement — a partial group that the
+    // journal then drops, leaving Postgres permanently behind memory.
+    const dataDir = dir();
+    const journalPath = join(dataDir, "journal.jsonl");
+    const tablesInitial = tables();
+
+    const sessions = [];
+    const pool = {
+      // A pool's per-call query is a different connection each time.
+      async query(sql) {
+        if (/^SELECT \* FROM ([A-Za-z_]\w*)/.test(sql)) {
+          return { rows: tablesInitial[sql.match(/^SELECT \* FROM ([A-Za-z_]\w*)/)[1]] ?? [] };
+        }
+        if (/information_schema\.columns/.test(sql)) return { rows: [] };
+        return { rows: [] };
+      },
+      async connect() {
+        const log = [];
+        sessions.push(log);
+        return {
+          async query(sql) { log.push(sql.trim()); return { rows: [] }; },
+          release() { log.push("<released>"); },
+        };
+      },
+    };
+
+    adapter = await createPostgresAdapter({ connectionString: "postgres://x", dataDir, client: pool, journalPath });
+    adapter.transaction(() => {
+      adapter.run("UPDATE providerConnections SET name = ? WHERE id = ?", ["B", "c1"]);
+      adapter.run("UPDATE providerConnections SET name = ? WHERE id = ?", ["C", "c1"]);
+    });
+    await adapter.flushNow();
+
+    expect(sessions).toHaveLength(1);
+    expect(sessions[0][0]).toBe("BEGIN");
+    expect(sessions[0]).toContain("UPDATE providerConnections SET name = $1 WHERE id = $2");
+    expect(sessions[0][sessions[0].length - 2]).toBe("COMMIT");
+    expect(sessions[0][sessions[0].length - 1]).toBe("<released>");
+  });
+});

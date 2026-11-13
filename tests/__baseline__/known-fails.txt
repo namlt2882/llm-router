@@ -153,3 +153,60 @@ tests/unit/kiro-external-idp.test.js :: Kiro external_idp (CLIProxyAPI) import a
 tests/unit/model-test-routing.test.js :: model test route kind routing returns formatted HTTP errors for non-2xx embedding responses
 tests/unit/provider-display-split.test.js :: provider display split (E1) Cloudflare exposes API-key authentication on its free-tier card
 tests/unit/xai-tokenRefresh.test.js :: xai/token-refresh wrapper refreshTokenByProvider returns expiresIn for refreshed xai tokens
+
+# Third full-run flake wave (2026-11-13), produced by the whole-branch review
+# fix pass. Evidence, in the order measured:
+#   - run A (current.json): 6 names new; run B (current2.json), identical
+#     command, minutes later: 37 new and a DIFFERENT set — only 1 name shared.
+#     A code regression cannot disappear between two runs of the same tree.
+#   - 35 of run B's 37 were vitest hook timeouts ("STACK_TRACE_ERROR"), and the
+#     host load average was 57 with 20 WaveBot containers live: the 5s default
+#     hook timeout is what expires, not the assertion.
+#   - 37 of the 42 have a `passed` record in a pristine-HEAD worktree run;
+#     the remaining 5 pass in their own file run (10, 4, 6, 18, 1 tests).
+#   - the two non-timeout names are in code no fork patch touches
+#     (opencodeTlsClient.js optional wreq-js; undici keep-alive replay).
+# Union policy, as with the two waves above: widened rather than triaged as
+# product bugs, because the isolation/HEAD runs are the evidence they are not.
+tests/unit/anthropic-gateway-passthrough.test.js :: DefaultExecutor.buildHeaders() forwards client anthropic-beta forwards client flags on the anthropic provider
+tests/unit/background-token-refresh.test.js :: runBackgroundTokenRefreshTick calls refresh only for due connections and swallows per-connection errors
+tests/unit/background-token-refresh.test.js :: runBackgroundTokenRefreshTick does not call refresh when nothing is due
+tests/unit/background-token-refresh.test.js :: runBackgroundTokenRefreshTick swallows top-level load errors
+tests/unit/background-token-refresh.test.js :: selectConnectionsNeedingRefresh selects already-expired oauth connection
+tests/unit/background-token-refresh.test.js :: start/stop guards honors DISABLE_BACKGROUND_TOKEN_REFRESH kill-switch
+tests/unit/background-token-refresh.test.js :: start/stop guards is idempotent: second start is no-op
+tests/unit/bedrock-provider-api-secrets.test.js :: Bedrock connection API secrets keeps a saved AWS session token when an edit sends an empty token field
+tests/unit/bedrock-provider-api-secrets.test.js :: Bedrock connection API secrets removes a saved AWS session token only when the edit explicitly clears it
+tests/unit/claude-header-forwarding.test.js :: DefaultExecutor.buildHeaders() — claude provider includes heavy-agent beta flags for claude-sonnet-5
+tests/unit/claude-header-forwarding.test.js :: DefaultExecutor.buildHeaders() — claude provider omits heavy-agent beta flags for claude-fable-5
+tests/unit/claude-header-forwarding.test.js :: DefaultExecutor.buildHeaders() — claude provider omits heavy-agent beta flags for claude-haiku-4-5-20251001
+tests/unit/cline-free-tier-models.test.js :: resolveClineModels free-tier merge includes the cline-free/* models that /api/v1/models omits
+tests/unit/codex-refresh-token.test.js :: Codex Refresh Token getRefreshLeadMs (early refresh config) codex lead should be greater than default buffer
+tests/unit/codex-refresh-token.test.js :: Codex Refresh Token getRefreshLeadMs (early refresh config) should fallback to default buffer for unknown providers
+tests/unit/codex-refresh-token.test.js :: Codex Refresh Token getRefreshLeadMs (early refresh config) should return provider-specific lead time for OAuth providers
+tests/unit/codex-reset-credits.test.js :: Codex reset credits GET force-refreshes OAuth credentials when reset credit fetch reports expired auth
+tests/unit/codex-reset-credits.test.js :: Codex reset credits GET refreshes OAuth credentials before returning reset credit details
+tests/unit/db-driver-chain.test.js :: Driver fallback chain falls back to node:sqlite when better-sqlite3 unavailable
+tests/unit/db-driver-chain.test.js :: Driver fallback chain falls back to sql.js when both native drivers unavailable
+tests/unit/db-migration-chain.test.js :: Schema migrations fresh DB → applies migrations & stamps schemaVersion
+tests/unit/db-null-byte-params.test.js :: driver binds NUL-containing strings safely stores the whole value instead of throwing or truncating
+tests/unit/gemini-live-stt.test.js :: App-layer custom transport resolution (stt.js) T15: persisted custom gemini-live transport reaches WS dispatch through real handleStt
+tests/unit/key-access-migration.test.js :: apiKeys access columns: upgrade from the previous schema persists access through update, new keys default to unrestricted
+tests/unit/kiro-external-idp.test.js :: Kiro external_idp (CLIProxyAPI) import and refresh imports CLIProxyAPI external_idp JSON as a Kiro OAuth connection
+tests/unit/opencode-wreq-proxy-routing.test.js :: opencodeTlsClient proxy-aware sessions builds a distinct session per proxy URL and reuses it per key
+tests/unit/opencode-wreq-proxy-routing.test.js :: opencodeTlsClient proxy-aware sessions omits the proxy field entirely on the direct path
+tests/unit/opencode-wreq-proxy-routing.test.js :: opencodeTlsClient proxy-aware sessions passes the proxy URL to wreq-js createSession
+tests/unit/opencode-wreq-proxy-routing.test.js :: proxyAwareFetch delegates the proxy to the transport adapter hands the resolved proxy URL to a proxyCapable directFetch instead of bypassing it
+tests/unit/postgres-driver-selection.test.js :: driver selection does not fall back to SQLite when LLM_ROUTER_DATABASE_URL is set but unreachable
+tests/unit/proxy-keepalive-dead-socket.test.js :: undici keep-alive dead-socket protection & fresh-socket retry classifies only provable dead-socket errors and excludes aborts/DNS/TLS/bare fetch failed
+tests/unit/proxy-keepalive-dead-socket.test.js :: undici keep-alive dead-socket protection & fresh-socket retry creates distinct shared direct and fresh-retry dispatchers
+tests/unit/proxy-keepalive-dead-socket.test.js :: undici keep-alive dead-socket protection & fresh-socket retry does not replay on the fresh socket when the caller aborted or the body is a locked stream
+tests/unit/proxy-keepalive-dead-socket.test.js :: undici keep-alive dead-socket protection & fresh-socket retry keeps the existing 4s default, clamps keepAliveMaxTimeout, and honors FETCH_KEEPALIVE_TIMEOUT_MS
+tests/unit/proxy-keepalive-dead-socket.test.js :: undici keep-alive dead-socket protection & fresh-socket retry replays once on the fresh-socket dispatcher when a pooled socket dies
+tests/unit/searxng-provider-config.test.js :: SearXNG provider configuration preserves the loopback default when SEARXNG_URL is unset
+tests/unit/searxng-provider-config.test.js :: SearXNG provider configuration uses SEARXNG_URL when the deployment config supplies one
+tests/unit/security-audit.test.js :: AUDIT-003: Proxy URL validation should accept valid http proxy URLs
+tests/unit/token-refresh-generic.test.js :: refreshAccessToken — config-driven profiles returns null when refreshToken missing
+tests/unit/usage-api-key-attribution.test.js :: Usage stats API key attribution keeps API keys with the same masked prefix in separate buckets
+tests/unit/usage-dispatch.test.js :: usage dispatch every supported provider routes to its handler (no fallback message)
+tests/unit/usage-dispatch.test.js :: usage dispatch routes authType through to the handler (lease connections rely on it)

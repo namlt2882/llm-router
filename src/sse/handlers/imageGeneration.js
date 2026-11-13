@@ -14,6 +14,7 @@ import { errorResponse, unavailableResponse } from "open-sse/utils/error.js";
 import { HTTP_STATUS } from "open-sse/config/runtimeConfig.js";
 import { updateProviderCredentials, checkAndRefreshToken } from "../services/tokenRefresh.js";
 import { handleComboChat } from "open-sse/services/combo.js";
+import { releaseAccountSlot, releaseSlotWithBody } from "../services/accountInflight.js";
 import * as log from "../utils/logger.js";
 import { saveRequestUsage } from "@/lib/usageDb.js";
 
@@ -139,47 +140,66 @@ async function handleSingleModelImage(body, modelStr, { wantsStream, binaryOutpu
     const adapter = getImageAdapter(provider);
     if (adapter?.canUseCredentials && !adapter.canUseCredentials(refreshedCredentials)) {
       log.info("IMAGE", `[${provider}/${model}] skip connection ${credentials.connectionId.slice(0, 8)}: plan not entitled to image generation`);
+      // Fork patch #5: this attempt is over without calling the core, so the
+      // slot getProviderCredentials took has to go back here, not at the return.
+      releaseAccountSlot(credentials.connectionId);
       excludeConnectionIds.add(credentials.connectionId);
       lastError = lastError || "No account entitled to image generation (ChatGPT Free plans are not supported)";
       lastStatus = lastStatus || HTTP_STATUS.FORBIDDEN;
       continue;
     }
 
-    const result = await handleImageGenerationCore({
-      body,
-      modelInfo: { provider, model },
-      credentials: refreshedCredentials,
-      streamToClient: wantsStream,
-      binaryOutput,
-      onCredentialsRefreshed: async (newCreds) => {
-        await updateProviderCredentials(credentials.connectionId, {
-          accessToken: newCreds.accessToken,
-          refreshToken: newCreds.refreshToken,
-          providerSpecificData: newCreds.providerSpecificData,
-          testStatus: "active"
-        });
-      },
-      onUsage: (usage) => {
-        recordImageRequestUsage({
-          provider,
-          model,
-          connectionId: credentials.connectionId,
-          apiKey,
-          endpoint,
-          usage,
-        });
-      },
-      onRequestSuccess: async () => {
-        await clearAccountError(credentials.connectionId, credentials, model);
-        // Cookies that rotate on use (Clerk `__client`) are mutated in place by
-        // the executor — persist the new value so the chain does not drift.
-        if (refreshedCredentials.apiKey && refreshedCredentials.apiKey !== credentials.apiKey) {
-          await updateProviderCredentials(credentials.connectionId, { apiKey: refreshedCredentials.apiKey });
+    // Fork patch #5: this attempt owns the slot from acquire until it is done
+    // with the account. Most image results are a finished body, but codex
+    // returns a LIVE SSE response, so releasing in `finally` would free the
+    // account before the client read a byte (four parallel streams would look
+    // like one). Release immediately for a finished result, on stream end
+    // otherwise.
+    let result;
+    try {
+      result = await handleImageGenerationCore({
+        body,
+        modelInfo: { provider, model },
+        credentials: refreshedCredentials,
+        streamToClient: wantsStream,
+        binaryOutput,
+        onCredentialsRefreshed: async (newCreds) => {
+          await updateProviderCredentials(credentials.connectionId, {
+            accessToken: newCreds.accessToken,
+            refreshToken: newCreds.refreshToken,
+            providerSpecificData: newCreds.providerSpecificData,
+            testStatus: "active"
+          });
+        },
+        onUsage: (usage) => {
+          recordImageRequestUsage({
+            provider,
+            model,
+            connectionId: credentials.connectionId,
+            apiKey,
+            endpoint,
+            usage,
+          });
+        },
+        onRequestSuccess: async () => {
+          await clearAccountError(credentials.connectionId, credentials, model);
+          // Cookies that rotate on use (Clerk `__client`) are mutated in place by
+          // the executor — persist the new value so the chain does not drift.
+          if (refreshedCredentials.apiKey && refreshedCredentials.apiKey !== credentials.apiKey) {
+            await updateProviderCredentials(credentials.connectionId, { apiKey: refreshedCredentials.apiKey });
+          }
         }
-      }
-    });
+      });
+    } catch (err) {
+      // The core threw before producing anything: nothing will consume a body.
+      releaseAccountSlot(credentials.connectionId);
+      throw err;
+    }
 
-    if (result.success) return result.response;
+    if (result.success) {
+      return releaseSlotWithBody(result.response, credentials.connectionId);
+    }
+    releaseAccountSlot(credentials.connectionId);
 
     const { shouldFallback } = await markAccountUnavailable(credentials.connectionId, result.status, result.error, provider, model);
 

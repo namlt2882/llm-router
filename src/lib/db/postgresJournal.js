@@ -71,6 +71,22 @@ export function createJournal({ filePath, fsImpl = null }) {
       return readJournal(filePath, fs);
     },
 
+    /**
+     * Replace the journal's contents with `groups`.
+     *
+     * The flush path needs this instead of `truncate()`: a write that arrives
+     * while a flush is awaiting Postgres is already in `pending` and already
+     * acknowledged to its caller, so a whole-file truncate would delete its
+     * only durable copy. Rewriting with what is still unconfirmed keeps every
+     * acknowledged group on disk exactly once.
+     */
+    rewrite(groups) {
+      const text = groups.map((g) => `${JSON.stringify(g)}\n`).join("");
+      fs.ftruncateSync(fd, 0);
+      if (text) fs.writeSync(fd, text);
+      fs.fsyncSync(fd);
+    },
+
     /** Called once the journal has been fully replayed into Postgres. */
     truncate() {
       fs.ftruncateSync(fd, 0);

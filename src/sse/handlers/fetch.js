@@ -10,6 +10,7 @@ import { AI_PROVIDERS, resolveProviderId } from "@/shared/constants/providers.js
 import { handleFetchCore } from "open-sse/handlers/fetch/index.js";
 import { errorResponse, unavailableResponse } from "open-sse/utils/error.js";
 import { HTTP_STATUS } from "open-sse/config/runtimeConfig.js";
+import { releaseAccountSlot } from "../services/accountInflight.js";
 import * as log from "../utils/logger.js";
 import { updateProviderCredentials, checkAndRefreshToken } from "../services/tokenRefresh.js";
 import { handleComboChat, getComboModelsFromData } from "open-sse/services/combo.js";
@@ -192,23 +193,30 @@ async function handleSingleProviderFetch(body, providerInput, request, apiKey, s
 
     const refreshedCredentials = await checkAndRefreshToken(providerId, credentials);
 
-    const result = await handleFetchCore({
-      url: targetUrl,
-      format,
-      maxCharacters,
-      provider: resolvedProvider.id,
-      providerConfig,
-      credentials: refreshedCredentials,
-      log,
-      onCredentialsRefreshed: async (newCreds) => {
-        await updateProviderCredentials(credentials.connectionId, {
-          accessToken: newCreds.accessToken,
-          refreshToken: newCreds.refreshToken,
-          providerSpecificData: newCreds.providerSpecificData,
-          testStatus: "active"
-        });
-      }
-    });
+    // Fork patch #5: the slot came from getProviderCredentials and fetch never
+    // streams, so this attempt owns it from acquire to return.
+    let result;
+    try {
+      result = await handleFetchCore({
+        url: targetUrl,
+        format,
+        maxCharacters,
+        provider: resolvedProvider.id,
+        providerConfig,
+        credentials: refreshedCredentials,
+        log,
+        onCredentialsRefreshed: async (newCreds) => {
+          await updateProviderCredentials(credentials.connectionId, {
+            accessToken: newCreds.accessToken,
+            refreshToken: newCreds.refreshToken,
+            providerSpecificData: newCreds.providerSpecificData,
+            testStatus: "active"
+          });
+        }
+      });
+    } finally {
+      releaseAccountSlot(credentials.connectionId);
+    }
 
     if (result.success) {
       await clearAccountError(credentials.connectionId, credentials, fetchLockKey);

@@ -81,7 +81,13 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
 
   // Check for bypass patterns (warmup, skip, cc naming)
   const bypassResponse = handleBypassRequest(body, model, userAgent, ccFilterNaming);
-  if (bypassResponse) return bypassResponse;
+  if (bypassResponse) {
+    // Fork patch #5: the caller already took this account's in-flight slot, and
+    // a synthesized response means no executor, stream or disconnect callback
+    // will ever release it — four warmup/title requests would wedge the account.
+    releaseAccountSlot(connectionId);
+    return bypassResponse;
+  }
 
   const alias = PROVIDER_ID_TO_ALIAS[provider] || provider;
   const modelTargetFormat = getModelTargetFormat(alias, model);

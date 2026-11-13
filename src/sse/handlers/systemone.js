@@ -11,6 +11,7 @@ import { getKeyAccessContext, enforceKeyAccessResolved } from "../services/keyAc
 import { handleSystemoneCore } from "open-sse/handlers/systemoneCore.js";
 import { errorResponse, unavailableResponse } from "open-sse/utils/error.js";
 import { HTTP_STATUS } from "open-sse/config/runtimeConfig.js";
+import { releaseAccountSlot } from "../services/accountInflight.js";
 import * as log from "../utils/logger.js";
 import { checkAndRefreshToken } from "../services/tokenRefresh.js";
 import { saveRequestUsage } from "@/lib/usageDb.js";
@@ -114,15 +115,22 @@ export async function handleSystemone(request) {
 
     const refreshedCredentials = await checkAndRefreshToken(provider, credentials);
 
-    const result = await handleSystemoneCore({
-      body,
-      modelInfo: { provider, model },
-      credentials: refreshedCredentials,
-      log,
-      onRequestSuccess: async () => {
-        await clearAccountError(credentials.connectionId, credentials, model);
-      }
-    });
+    // Fork patch #5: the slot came from getProviderCredentials; this handler
+    // never streams, so the attempt owns it start to finish.
+    let result;
+    try {
+      result = await handleSystemoneCore({
+        body,
+        modelInfo: { provider, model },
+        credentials: refreshedCredentials,
+        log,
+        onRequestSuccess: async () => {
+          await clearAccountError(credentials.connectionId, credentials, model);
+        }
+      });
+    } finally {
+      releaseAccountSlot(credentials.connectionId);
+    }
 
     if (result.success) {
       if (result.usage) {

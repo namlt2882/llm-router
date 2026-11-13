@@ -1,0 +1,3 @@
+
+# Vitest JSON run artifacts (verify-no-regression input, not source).
+current*.json
