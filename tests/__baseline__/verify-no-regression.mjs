@@ -12,9 +12,16 @@ const resultsPath = process.argv[2];
 if (!resultsPath) { console.error("Missing results.json path"); process.exit(2); }
 
 const r = JSON.parse(readFileSync(resultsPath, "utf8"));
+// Derive the repo-relative path from the checkout actually in use. The old
+// split("/app/") assumed the maintainer's container layout; in any other
+// checkout it yielded `undefined` and every known failure read as a regression.
+const relName = (name) => {
+  const i = name.lastIndexOf("/tests/");
+  return i === -1 ? name : name.slice(i + 1);
+};
 const nowFails = r.testResults.flatMap(f =>
   f.assertionResults.filter(a => a.status === "failed")
-    .map(a => f.name.split("/app/")[1] + " :: " + a.fullName)
+    .map(a => relName(f.name) + " :: " + a.fullName)
 );
 
 // Regression = fail bây giờ NHƯNG không có trong baseline known-fails
