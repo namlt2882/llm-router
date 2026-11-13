@@ -1479,6 +1479,21 @@ export default function ProfilePage() {
               </div>
             )}
 
+            {/* Fork patch #6: quota-aware spread */}
+            <div className="flex items-start sm:items-center justify-between gap-4 pt-4 border-t border-border/50">
+              <div className="flex-1 min-w-0">
+                <p className="font-medium text-sm sm:text-base">Spread — quota aware</p>
+                <p className="text-xs sm:text-sm text-text-muted">
+                  Send each request to the account with the most free capacity before falling back to priority
+                </p>
+              </div>
+              <Toggle
+                checked={settings.fallbackStrategy === "spread"}
+                onChange={() => updateFallbackStrategy(settings.fallbackStrategy === "spread" ? "fill-first" : "spread")}
+                disabled={loading}
+              />
+            </div>
+
             {/* Combo Round Robin */}
             <div className="flex items-start sm:items-center justify-between gap-4 pt-4 border-t border-border/50">
               <div className="flex-1 min-w-0">

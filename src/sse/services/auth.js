@@ -238,6 +238,24 @@ export async function getProviderCredentials(provider, excludeConnectionIds = nu
           consecutiveUseCount: 1
         });
       }
+    } else if (strategy === "spread") {
+      // Fork patch #6: spread the load. Priority alone funnels every request at
+      // the best account until it is at its cap; this scores the already-
+      // available set by how much room it actually has, so parallel traffic
+      // fans out while prompt-cache affinity (above) is untouched.
+      const recency = (c) => {
+        const t = Date.parse(c.lastUsedAt || "");
+        return Number.isFinite(t) ? t : 0; // never used sorts first
+      };
+      const ranked = [...availableConnections].sort((a, b) =>
+        (getInflightCount(a.id) - getInflightCount(b.id))
+        || ((a.backoffLevel || 0) - (b.backoffLevel || 0))
+        || (recency(a) - recency(b))
+        || ((a.priority || 999) - (b.priority || 999)));
+      connection = ranked[0];
+      log.info("AUTH", `${provider} | spread → ${connection.id?.slice(0, 8)} (inflight ${getInflightCount(connection.id)})`);
+      // Recency is an input to the next pick, so it must persist.
+      await updateProviderConnection(connection.id, { lastUsedAt: new Date().toISOString() });
     } else {
       // Default: fill-first (already sorted by priority in getProviderConnections)
       connection = availableConnections[0];

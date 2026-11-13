@@ -12,6 +12,9 @@ const DEFAULT_SETTINGS = {
   tailscaleEnabled: false,
   tailscaleUrl: "",
   stickyRoundRobinLimit: 3,
+  // Fork patch #6: explicit, so "spread" is a value the stored settings can
+  // hold rather than one only the code knows how to fall back to.
+  fallbackStrategy: "fill-first",
   providerStrategies: {},
   quotaVisibility: {},
   comboStrategy: "fallback",
