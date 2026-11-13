@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1.7
-ARG NODE_IMAGE=node:22.23.4-alpine
+ARG NODE_IMAGE=node:24-alpine
 ARG ALPINE_MIRROR=dl-cdn.alpinelinux.org
 ARG NPM_REGISTRY=https://registry.npmjs.org/
 ARG APP_VERSION=unknown
@@ -76,15 +76,12 @@ COPY --from=builder /app/custom-server.js ./custom-server.js
 COPY --from=builder /app/open-sse ./open-sse
 # Next file tracing can omit sibling files; MITM runs server.js as a separate process.
 COPY --from=builder /app/src/mitm ./src/mitm
-# Standalone node_modules may omit deps only required by the MITM child process.
-COPY --from=builder /app/node_modules/node-forge ./node_modules/node-forge
-# Ensure `next` is available at runtime in case tracing did not include it.
-COPY --from=builder /app/node_modules/next ./node_modules/next
-# sql.js loads dist/sql-wasm.wasm by path at runtime; tracing only follows JS imports,
-# so the last-resort DB driver would abort with ENOENT on the missing binary.
-COPY --from=builder /app/node_modules/sql.js ./node_modules/sql.js
-# node-machine-id is createRequire-loaded at runtime; tracing omits it.
-COPY --from=builder /app/node_modules/node-machine-id ./node_modules/node-machine-id
+# Fork patch #10: copy the whole module tree instead of an enumerated list.
+# The list silently omitted anything added later — `pg` (the Postgres mirror's
+# driver) is loaded through a dynamic import that tracing does not follow, so an
+# enumerated copy would produce an image that boots and then fails on the first
+# mirror flush. The image is larger; a missing module here is a production bug.
+COPY --from=builder /app/node_modules ./node_modules
 # wreq-js + playwright-core (and deps) are lazy-loaded at runtime and omitted by
 # tracing. See https://github.com/decolua/9router/issues/5245
 COPY --from=builder /opt/lazy-runtime/node_modules/. ./node_modules/
