@@ -6,6 +6,8 @@ import { resolveProviderId, FREE_PROVIDERS } from "@/shared/constants/providers.
 import { getAntigravityQuotaCache, getAntigravityModelQuota } from "./antigravityQuota.js";
 // Fork patch #4: session → account affinity (see sessionPin.js).
 import { getPinnedConnectionId } from "./sessionPin.js";
+// Fork patch #5: per-account in-flight cap, acquired inside the selection mutex.
+import { accountInflightLimit, getInflightCount, tryAcquireAccountSlot } from "./accountInflight.js";
 import * as log from "../utils/logger.js";
 
 // Mutex to prevent race conditions during account selection
@@ -87,10 +89,19 @@ export async function getProviderCredentials(provider, excludeConnectionIds = nu
     const isAntigravity = providerId === "antigravity";
     const antigravityQuotaCache = isAntigravity && model ? getAntigravityQuotaCache() : null;
 
+    // Fork patch #5: an account at its in-flight cap is temporarily unusable —
+    // distinct from locked (which has a known reset) and from empty.
+    const inflightLimit = accountInflightLimit();
+    let busyCount = 0;
+
     // Filter out model-locked, excluded, and Antigravity quota-exhausted connections.
     const availableConnections = connections.filter(c => {
       if (excludeSet.has(c.id)) return false;
       if (isModelLockActive(c, model)) return false;
+      if (getInflightCount(c.id) >= inflightLimit) {
+        busyCount += 1;
+        return false;
+      }
       const enabled = c.providerSpecificData?.enabledModels;
       if (providerId === "codex" && Array.isArray(enabled) && enabled.length && requestedModel && !enabled.includes(requestedModel)) return false;
       // Antigravity: skip if live quota exhausted for this model
@@ -138,6 +149,19 @@ export async function getProviderCredentials(provider, excludeConnectionIds = nu
           retryAfterHuman: formatRetryAfter(earliest),
           lastError: earliestConn?.lastError || null,
           lastErrorCode: earliestConn?.errorCode || null
+        };
+      }
+      // Fork patch #5: every account is merely BUSY. That is a retryable 503,
+      // never "no credentials" (404) — the accounts exist and will free up.
+      if (busyCount > 0 && lockedConns.length === 0) {
+        const retryAfter = new Date(Date.now() + 2000).toISOString();
+        log.warn("AUTH", `${provider} | all ${connections.length} accounts at max in-flight (${inflightLimit})`);
+        return {
+          allRateLimited: true,
+          retryAfter,
+          retryAfterHuman: "2s",
+          lastError: "All accounts at max in-flight",
+          lastErrorCode: "account_busy",
         };
       }
       log.warn("AUTH", `${provider} | all ${connections.length} accounts unavailable`);
@@ -217,6 +241,13 @@ export async function getProviderCredentials(provider, excludeConnectionIds = nu
     } else {
       // Default: fill-first (already sorted by priority in getProviderConnections)
       connection = availableConnections[0];
+    }
+
+    // Fork patch #5: take the slot while still inside the selection mutex, so
+    // no concurrent selector can pick the same account past its cap. The
+    // release sites are the same ones that decrement the pending tracker.
+    if (!tryAcquireAccountSlot(connection.id, inflightLimit)) {
+      log.warn("AUTH", `${provider} | slot race on ${connection.id?.slice(0, 8)} — serving anyway`);
     }
 
     const resolvedProxy = await resolveConnectionProxyConfig(connection.providerSpecificData || {});
