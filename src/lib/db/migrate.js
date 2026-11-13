@@ -219,10 +219,9 @@ export async function runMigrationOnce(adapter) {
 
   // Fork patch #9: in mirror mode there is nothing to back up (the Postgres copy
   // is the durable one), no legacy JSON to import (a fresh deployment), and the
-  // schema is declared in schema.js — run the chain, then reconcile the mirror.
+  // schema is owned by goose (db/migrations) — run the in-memory chain only.
   if (adapter.driver === "postgres") {
     runVersionedMigrations(adapter);
-    await adapter.syncMirrorSchemaFromTables();
     return;
   }
 

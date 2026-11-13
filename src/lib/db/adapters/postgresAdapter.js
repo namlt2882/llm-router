@@ -57,18 +57,6 @@ function isNumericColumn(table, column) {
   return /INTEGER|REAL|NUMERIC/i.test(decl);
 }
 
-/** Mirror DDL: text everywhere, except the one auto-increment key. */
-function buildPostgresTableSql(name) {
-  const def = TABLES[name];
-  const cols = Object.entries(def.columns).map(([col]) => {
-    if (name === "usageHistory" && col === "id") return "id bigserial PRIMARY KEY";
-    return `${col} text`;
-  });
-  const keys = PRIMARY_KEYS[name];
-  if (keys && !(name === "usageHistory")) cols.push(`PRIMARY KEY (${keys.join(", ")})`);
-  return `CREATE TABLE IF NOT EXISTS ${name} (${cols.join(", ")})`;
-}
-
 /** Bind-safe scalar for pg: keep numbers numeric (bigint columns cast text badly). */
 function pgParam(value) {
   if (value === undefined) return null;
@@ -87,11 +75,6 @@ export async function createPostgresAdapter({ connectionString, dataDir, client,
 
   const journal = createJournal({ filePath: journalFile });
 
-  // ── 1. Mirror schema ────────────────────────────────────────────────────
-  for (const name of TABLE_NAMES) {
-    await pgClient.query(buildPostgresTableSql(name));
-  }
-
   // ── 2. Replay whatever a killed process left behind, then truncate ──────
   // readJournal throws on a corrupt line: refuse to boot rather than silently
   // start a mirror that is missing writes we cannot identify.
@@ -99,12 +82,11 @@ export async function createPostgresAdapter({ connectionString, dataDir, client,
   for (const group of leftover) {
     await runGroup(pgClient, group);
   }
-  if (leftover.length) {
-    journal.truncate();
-    // Replayed ids were explicit; move the serial sequence past them before
-    // anything inserts a row without an id.
-    await resyncSequences(pgClient);
-  }
+  if (leftover.length) journal.truncate();
+  // Mirrored ids are explicit, so the serial sequence never advances on its
+  // own. Move it past every stored id at each boot, before anything inserts a
+  // row without one. (Boot used to do this as a side effect of the schema sync.)
+  await resyncSequences(pgClient);
 
   // ── 3. In-memory SQLite, loaded from Postgres ───────────────────────────
   const mem = new DatabaseSync(":memory:");
@@ -207,7 +189,7 @@ export async function createPostgresAdapter({ connectionString, dataDir, client,
 
     /**
      * DDL (migrations, PRAGMAs) runs on the memory database only. The mirror's
-     * schema is owned by buildPostgresTableSql above — replaying SQLite DDL into
+     * schema is owned by goose (db/migrations) — replaying SQLite DDL into
      * Postgres would fail on AUTOINCREMENT and rewrite the wrong thing.
      */
     exec(sql) {
@@ -234,34 +216,6 @@ export async function createPostgresAdapter({ connectionString, dataDir, client,
         if (group) openGroup = null;
         throw err;
       }
-    },
-
-    async syncMirrorSchemaFromTables() {
-      for (const [name, def] of Object.entries(TABLES)) {
-        const { rows } = await pgClient.query(
-          "SELECT column_name FROM information_schema.columns WHERE table_name = $1",
-          [name],
-        );
-        // Postgres folds unquoted identifiers to lower case, so the mirror's
-        // own DDL produces `createdat` for the schema's `createdAt`. Comparing
-        // raw names made every boot re-issue `ALTER TABLE … ADD COLUMN
-        // createdAt` and fail the whole DB layer with 42701 ("column already
-        // exists") — found live 2026-11-13, on the second boot only, because
-        // the first boot is what creates the table.
-        const existing = new Set(
-          (rows || []).map((r) => String(r.column_name ?? r.columnName ?? "").toLowerCase()),
-        );
-        // A fake/partial client may report no columns at all; skip rather than
-        // re-adding every column of an existing table on every boot.
-        if (!existing.size) continue;
-        for (const col of Object.keys(def.columns)) {
-          if (!existing.has(col.toLowerCase())) {
-            await pgClient.query(`ALTER TABLE ${name} ADD COLUMN ${col} text`);
-            console.log(`[DB][pg] +column ${name}.${col}`);
-          }
-        }
-      }
-      await resyncSequences(pgClient);
     },
 
     flushNow,
@@ -332,4 +286,4 @@ async function createPool(connectionString) {
 }
 
 /** Exported for tests that want to check the DDL without a database. */
-export { buildPostgresTableSql, countPlaceholders };
+export { countPlaceholders };
