@@ -268,7 +268,13 @@ export async function createPostgresAdapter({ connectionString, dataDir, client,
 
     async close() {
       if (closed) return;
-      try { await flushNow(); } finally {
+      try {
+        await flushNow();
+      } catch (err) {
+        // The journal already holds every unflushed group durably and replays
+        // at the next boot; an outage must not turn shutdown into a throw.
+        console.warn(`[DB] close: final flush failed, journal retained: ${err?.message ?? err}`);
+      } finally {
         closed = true;
         journal.close();
         try { mem.close(); } catch { /* already closed */ }

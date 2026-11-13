@@ -32,8 +32,10 @@ export function getPinnedConnectionId(providerId, sessionId) {
     pins.delete(k);
     return null;
   }
-  // Refresh recency for LRU ordering.
+  // Refresh recency; eviction walks Map insertion order, so move it to the end.
   entry.lastUsed = Date.now();
+  pins.delete(k);
+  pins.set(k, entry);
   return entry.connectionId;
 }
 

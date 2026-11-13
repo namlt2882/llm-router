@@ -94,6 +94,25 @@ describe("postgres adapter", () => {
     })).rejects.toThrow(/line 1/);
   });
 
+  it("close() during a Postgres outage resolves and keeps the write in the journal", async () => {
+    const dataDir = dir();
+    const journalPath = join(dataDir, "journal.jsonl");
+    const client = fakeClient(tables());
+    const a = await createPostgresAdapter({
+      connectionString: "postgres://x", dataDir, client, journalPath,
+    });
+    const realQuery = client.query.bind(client);
+    client.query = async (sql, params) => {
+      if (/^(BEGIN|UPDATE|COMMIT|ROLLBACK)/.test(sql)) throw new Error("connect ECONNREFUSED");
+      return realQuery(sql, params);
+    };
+    a.run("UPDATE providerConnections SET name = ? WHERE id = ?", ["B", "c1"]);
+
+    await expect(a.close()).resolves.toBeUndefined();
+
+    expect(readJournal(journalPath)).toHaveLength(1);
+  });
+
   it("translates INSERT OR REPLACE through the primary key", async () => {
     const client = fakeClient(tables());
     adapter = await createPostgresAdapter({ connectionString: "postgres://x", dataDir: dir(), client });

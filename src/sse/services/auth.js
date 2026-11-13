@@ -265,7 +265,17 @@ export async function getProviderCredentials(provider, excludeConnectionIds = nu
     // no concurrent selector can pick the same account past its cap. The
     // release sites are the same ones that decrement the pending tracker.
     if (!tryAcquireAccountSlot(connection.id, inflightLimit)) {
-      log.warn("AUTH", `${provider} | slot race on ${connection.id?.slice(0, 8)} — serving anyway`);
+      // The account filled between choosing it and taking its slot. Serving it
+      // anyway would make the cap advisory; answer the same retryable busy
+      // state as the all-accounts-full path, which callers already handle.
+      log.warn("AUTH", `${provider} | slot race on ${connection.id?.slice(0, 8)} — account now at max in-flight (${inflightLimit})`);
+      return {
+        allRateLimited: true,
+        retryAfter: new Date(Date.now() + 2000).toISOString(),
+        retryAfterHuman: "2s",
+        lastError: "All accounts at max in-flight",
+        lastErrorCode: "account_busy",
+      };
     }
 
     const resolvedProxy = await resolveConnectionProxyConfig(connection.providerSpecificData || {});

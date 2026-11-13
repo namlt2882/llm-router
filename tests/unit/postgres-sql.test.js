@@ -77,6 +77,21 @@ describe("statement scanning", () => {
       .toBe("SELECT * FROM t WHERE label = 'a?b' AND id = $1");
   });
 
+  it("does not count a ? inside a quoted identifier", () => {
+    expect(toPgPlaceholders('SELECT "a?b" FROM t WHERE id = ?', 1))
+      .toBe('SELECT "a?b" FROM t WHERE id = $1');
+  });
+
+  it("does not count a ? inside a line comment", () => {
+    expect(toPgPlaceholders("SELECT 1 -- why?\nFROM t WHERE id = ?", 1))
+      .toBe("SELECT 1 -- why?\nFROM t WHERE id = $1");
+  });
+
+  it("does not count a ? inside a block comment", () => {
+    expect(toPgPlaceholders("SELECT /* is this ok? */ id FROM t WHERE id = ?", 1))
+      .toBe("SELECT /* is this ok? */ id FROM t WHERE id = $1");
+  });
+
   it("puts the ON CONFLICT clause before RETURNING, never after", () => {
     expect(translateWrite("INSERT OR REPLACE INTO kv(scope, key, value) VALUES(?, ?, ?) RETURNING key", PK))
       .toBe("INSERT INTO kv(scope, key, value) VALUES($1, $2, $3) ON CONFLICT (scope, key) DO UPDATE SET value = excluded.value RETURNING key");

@@ -30,30 +30,56 @@ export class PostgresTranslationError extends Error {
 }
 
 /**
- * Walk and split a statement, remembering whether each character is inside a
- * single-quoted literal ('' is an escaped quote inside one).
+ * Walk a statement and number its `?` placeholders. A `?` inside a
+ * single-quoted literal, a double-quoted identifier, a `--` line comment or a
+ * block comment is text, not a placeholder; those regions are copied through
+ * untouched ('' and "" are escaped quotes inside their own kind).
  */
 function scan(sql, onPlaceholder) {
-  let inString = false;
+  let quote = null; // "'" or '"' while inside one
+  let comment = null; // "line" or "block" while inside one
   let out = "";
   let n = 0;
   for (let i = 0; i < sql.length; i += 1) {
     const ch = sql[i];
-    if (inString) {
+    if (quote) {
       out += ch;
-      if (ch === "'") {
-        if (sql[i + 1] === "'") {
-          out += "'";
+      if (ch === quote) {
+        if (sql[i + 1] === quote) {
+          out += quote;
           i += 1;
         } else {
-          inString = false;
+          quote = null;
         }
       }
       continue;
     }
-    if (ch === "'") {
-      inString = true;
+    if (comment) {
       out += ch;
+      if (comment === "line" && ch === "\n") {
+        comment = null;
+      } else if (comment === "block" && ch === "*" && sql[i + 1] === "/") {
+        out += "/";
+        i += 1;
+        comment = null;
+      }
+      continue;
+    }
+    if (ch === "'" || ch === '"') {
+      quote = ch;
+      out += ch;
+      continue;
+    }
+    if (ch === "-" && sql[i + 1] === "-") {
+      comment = "line";
+      out += "--";
+      i += 1;
+      continue;
+    }
+    if (ch === "/" && sql[i + 1] === "*") {
+      comment = "block";
+      out += "/*";
+      i += 1;
       continue;
     }
     if (ch === "?") {
