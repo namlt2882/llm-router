@@ -210,3 +210,28 @@ tests/unit/token-refresh-generic.test.js :: refreshAccessToken — config-driven
 tests/unit/usage-api-key-attribution.test.js :: Usage stats API key attribution keeps API keys with the same masked prefix in separate buckets
 tests/unit/usage-dispatch.test.js :: usage dispatch every supported provider routes to its handler (no fallback message)
 tests/unit/usage-dispatch.test.js :: usage dispatch routes authType through to the handler (lease connections rely on it)
+# Fourth run (2026-11-13, load average 83-123): 23 further names. 22 pass when their own file is run alone (same hook-timeout flake as above);
+# 1 (claude-header-forwarding 'falls back gracefully') fails identically on upstream 1855aa44, checked in a git worktree, so it is pre-existing and not a regression.
+tests/unit/antigravity-oauth-client.test.js :: antigravity oauth client (deduped) google client shared by gemini + gemini-cli
+tests/unit/claude-header-forwarding.test.js :: DefaultExecutor.buildHeaders() — claude provider sets x-api-key auth when apiKey is provided
+tests/unit/claude-header-forwarding.test.js :: DefaultExecutor.buildHeaders() — claude provider sets Bearer Authorization when only accessToken is provided
+tests/unit/claude-header-forwarding.test.js :: DefaultExecutor.buildHeaders() — claude provider includes Accept: text/event-stream when stream=true
+tests/unit/claude-header-forwarding.test.js :: DefaultExecutor.buildHeaders() — claude provider omits Accept: text/event-stream when stream=false
+tests/unit/claude-header-forwarding.test.js :: DefaultExecutor.buildHeaders() — claude provider does not throw when no model is given
+tests/unit/claude-header-forwarding.test.js :: DefaultExecutor.buildHeaders() — claude provider sets x-claude-code-session-id from metadata.user_id on Claude OAuth
+tests/unit/db-migration-chain.test.js :: Schema migrations existing DB at older schemaVersion → re-applies pending migrations on restart
+tests/unit/db-migration-chain.test.js :: Schema migrations fresh DB + legacy db.json → imports data automatically
+tests/unit/db-migration-chain.test.js :: Schema migrations auto-sync re-creates missing index when DB lacks it
+tests/unit/db-null-byte-params.test.js :: driver binds NUL-containing strings safely keeps a NUL out of a lookup value too
+tests/unit/db-null-byte-params.test.js :: driver binds NUL-containing strings safely leaves the driver identity and the other methods intact
+tests/unit/econnreset-repro.test.js :: A. request-phase ECONNRESET (RST before response headers) retries per the 502 retry config, then surfaces the production error string
+tests/unit/econnreset-repro.test.js :: A. request-phase ECONNRESET (RST before response headers) with retries disabled, fails on the first attempt
+tests/unit/gemini-live-stt.test.js :: Custom-model transport persistence via POST /api/models/custom T13: whitelisted transport persists on the saved row
+tests/unit/key-access-migration.test.js :: apiKeys access columns: upgrade from the previous schema export/import round-trips access; a backup without access restores unrestricted; malformed access is refused
+tests/unit/minimax-tts.test.js :: MiniMax TTS sends MiniMax T2A payload and converts hex audio to base64 JSON
+tests/unit/minimax-tts.test.js :: MiniMax TTS uses the default MiniMax voice when no voice is provided
+tests/unit/models-route-shadow-dedupe.test.js :: /api/models — custom-model shadow dedupe drops the ocg/claude-haiku-5-5 shadow and keeps the 1M registry entry
+tests/unit/models-route-shadow-dedupe.test.js :: /api/models — custom-model shadow dedupe keeps non-colliding custom rows and resolves their caps by provider id
+tests/unit/postgres-driver-selection.test.js :: driver selection still resolves a SQLite driver when no router database is configured
+tests/unit/quota-auto-ping.test.js :: quota auto-ping does not ping Codex when setting is absent
+tests/unit/strict-proxy-enforcement.test.js :: strictProxy refuses a direct connection (#4333) does not block a caller that sets strictProxy with no proxy configured

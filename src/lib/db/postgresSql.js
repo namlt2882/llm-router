@@ -117,6 +117,23 @@ export function translateWrite(sql, primaryKeyFor) {
   let clause = "";
   if (hasConflict) {
     clause = "";
+  } else if (!modifier) {
+    // A plain INSERT must still be REPLAY-SAFE. The journal's recovery rule is
+    // "a group that is in the journal may or may not have reached Postgres, so
+    // replay it", which is only sound if running it twice is harmless. For
+    // `INSERT INTO kv(scope, key, value)` a second run raises 23505 and boot
+    // replay rethrows — the mirror refuses to start; for `usageHistory` (whose
+    // id is a bigserial) it silently allocates a NEW id, so a double-counted
+    // usage row lands in the mirror and the id ordering diverges from memory.
+    // DO NOTHING is the right spelling: a replayed row is one this group
+    // already wrote, so there is nothing to update.
+    //
+    // Only when the table's whole key is bound: an INSERT that lets Postgres
+    // allocate the key can never conflict on it, and adding DO NOTHING there
+    // would only hide a schema mismatch.
+    if (conflictKey && conflictKey.length && conflictKey.every((k) => columns.includes(k))) {
+      clause = " ON CONFLICT DO NOTHING";
+    }
   } else if (modifier && modifier.toUpperCase() === "IGNORE") {
     clause = " ON CONFLICT DO NOTHING";
   } else if (modifier) {

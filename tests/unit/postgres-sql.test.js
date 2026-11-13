@@ -36,6 +36,39 @@ describe("translateWrite", () => {
     expect(translateWrite("INSERT OR REPLACE INTO apiKeys(id) VALUES(?)", PK))
       .toBe("INSERT INTO apiKeys(id) VALUES($1) ON CONFLICT (id) DO NOTHING");
   });
+
+  // The journal's replay guarantee depends on this: "a group that is in the
+  // journal may or may not have reached Postgres, so replay it" is only safe
+  // when replaying twice is harmless. A plain INSERT is NOT harmless — it
+  // either raises 23505 (kv: the mirror then refuses to boot, because boot
+  // replay rethrows) or allocates a fresh serial id and double-counts a usage
+  // row, and `usage` is read back ordered by that id.
+  describe("plain INSERT into a keyed table becomes replay-safe", () => {
+    it("appends DO NOTHING on a table whose key is fully bound", () => {
+      expect(translateWrite("INSERT INTO kv(scope, key, value) VALUES('customModels', ?, ?)", PK))
+        .toBe("INSERT INTO kv(scope, key, value) VALUES('customModels', $1, $2) ON CONFLICT DO NOTHING");
+    });
+    // NOT fixable here, and deliberately not pretended otherwise: the serial
+    // key is not in the column list, so a replayed row gets a NEW id and can
+    // never conflict. `ON CONFLICT DO NOTHING` would be decoration. The
+    // remaining duplicate window (committed, then killed before the journal
+    // rewrite) is recorded in docs/wavebot-patches.md as a known limitation.
+    it("leaves the serial-id usage table alone — a fresh id cannot conflict", () => {
+      const sql = "INSERT INTO usageHistory(timestamp, provider, model) VALUES(?, ?, ?)";
+      expect(translateWrite(sql, PK)).toBe(
+        "INSERT INTO usageHistory(timestamp, provider, model) VALUES($1, $2, $3)",
+      );
+    });
+    it("leaves an unkeyed table's plain INSERT alone (nothing to conflict on)", () => {
+      const sql = "INSERT INTO notes(body) VALUES(?)";
+      expect(translateWrite(sql, () => null)).toBe("INSERT INTO notes(body) VALUES($1)");
+    });
+    it("does not touch a plain INSERT whose key is not bound (would never conflict)", () => {
+      const sql = "INSERT INTO settings(name) VALUES(?)";
+      expect(translateWrite(sql, (t) => (t === "settings" ? ["id"] : null)))
+        .toBe("INSERT INTO settings(name) VALUES($1)");
+    });
+  });
 });
 
 describe("statement scanning", () => {
