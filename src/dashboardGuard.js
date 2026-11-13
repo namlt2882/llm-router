@@ -27,6 +27,8 @@ const PUBLIC_API_PATHS = [
   "/api/auth/login",
   "/api/auth/logout",
   "/api/auth/status",
+  // Fork patch #3: lets the login page learn whether the password form applies.
+  "/api/auth/mode",
   "/api/auth/oidc",
   "/api/auth/saml",
   "/api/version",
@@ -210,6 +212,11 @@ export const __test__ = {
 
 export async function proxy(request) {
   const { pathname } = request.nextUrl;
+
+  // Fork patch #2: the ticket exchange is how a session is MINTED, so it is the
+  // one /dashboard path that must pass without one. Everything else under
+  // /dashboard keeps the cookie requirement below, unchanged.
+  if (pathname === "/dashboard/auth/ticket") return NextResponse.next();
 
   // Local-only gate for spawn-capable / host-secret routes.
   if (LOCAL_ONLY_PATHS.some((p) => pathname.startsWith(p))) {

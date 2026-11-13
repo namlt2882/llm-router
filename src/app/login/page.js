@@ -11,6 +11,9 @@ export default function LoginPage() {
   const [loading, setLoading] = useState(false);
   const [hasPassword, setHasPassword] = useState(null);
   const [authMode, setAuthMode] = useState("password");
+  // Fork patch #3: true when WAVEBOT_AUTH_URL is set — the ticket exchange is
+  // then the only door, and a password form here would only be refused.
+  const [wavebot, setWavebot] = useState(false);
   const [ssoType, setSsoType] = useState("oidc");
   const [oidcConfigured, setOidcConfigured] = useState(false);
   const [oidcLoginLabel, setOidcLoginLabel] = useState("Sign in with OIDC");
@@ -25,6 +28,24 @@ export default function LoginPage() {
     const id = setInterval(() => setRetryAfter((s) => (s > 0 ? s - 1 : 0)), 1000);
     return () => clearInterval(id);
   }, [retryAfter]);
+
+  // Ask which login door this deployment has, and surface a failed exchange.
+  useEffect(() => {
+    let cancelled = false;
+    const baseUrl = typeof window !== "undefined" ? window.location.origin : "";
+    fetch(`${baseUrl}/api/auth/mode`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (cancelled) return;
+        if (d) setWavebot(d.wavebot === true);
+        const params = new URLSearchParams(window.location.search);
+        if (params.get("error") === "wavebot_ticket") {
+          setError("WaveBot sign-in failed. Open the router again from WaveBot (Settings → LLM router).");
+        }
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
 
   useEffect(() => {
     async function checkAuth() {
@@ -144,6 +165,32 @@ export default function LoginPage() {
         <div className="text-center">
           <div className="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
           <p className="text-text-muted mt-4">Loading...</p>
+        </div>
+      </div>
+    );
+  }
+
+  // Fork patch #3: WaveBot mode replaces the whole form. The ticket route is
+  // the only way in, and telling the operator that beats a password box that
+  // always answers `wavebot_auth_required`.
+  if (wavebot) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-bg p-4 relative overflow-hidden">
+        <div className="landing-grid absolute inset-0 pointer-events-none" aria-hidden="true" />
+        <div className="relative z-10 w-full max-w-md">
+          <div className="text-center mb-8">
+            <h1 className="text-3xl font-bold text-primary mb-2">9Router</h1>
+            <p className="text-text-muted">Sign in through WaveBot</p>
+          </div>
+          <Card>
+            <div className="flex flex-col gap-4">
+              <p className="text-sm text-text-muted">
+                This router is managed by WaveBot. Open it from WaveBot under
+                Settings &rarr; LLM router; the button there signs you in.
+              </p>
+              {error && <p className="text-xs text-red-500">{error}</p>}
+            </div>
+          </Card>
         </div>
       </div>
     );

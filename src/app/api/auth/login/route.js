@@ -19,6 +19,16 @@ function isTunnelRequest(request, settings) {
 }
 
 export async function POST(request) {
+  // Fork patch #3: in WaveBot mode the ticket is the only door. Refusing here
+  // (rather than in the page) keeps this true even for a client that posts
+  // the form directly.
+  if ((process.env.WAVEBOT_AUTH_URL ?? "").trim()) {
+    return NextResponse.json(
+      { error: "wavebot_auth_required" },
+      { status: 403, headers: NO_STORE_HEADERS },
+    );
+  }
+
   try {
     const ip = getClientIp(request);
     const lock = checkLock(ip);
