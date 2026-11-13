@@ -1,4 +1,4 @@
-import { ensureDirs, DATA_FILE } from "./paths.js";
+import { ensureDirs, DATA_FILE, DB_DIR } from "./paths.js";
 import { stripNullBytes } from "./helpers/nullBytes.js";
 
 // Use global to survive Next.js dev hot-reload (module state resets on reload)
@@ -81,12 +81,46 @@ function withNullByteSafeParams(adapter) {
   };
 }
 
+/**
+ * Fork patch #9: Postgres mirror wins whenever LLM_ROUTER_DATABASE_URL is set.
+ *
+ * Deliberately NOT a fallback chain: if the URL is configured but the database
+ * cannot be reached, boot fails. Quietly serving from a local SQLite file while
+ * the operator believes Postgres holds the data is the one failure mode this
+ * whole design exists to prevent.
+ */
+async function tryPostgres() {
+  const connectionString = process.env.LLM_ROUTER_DATABASE_URL;
+  if (!connectionString) return null;
+  const { createPostgresAdapter } = await import("./adapters/postgresAdapter.js");
+  const { mkdirSync } = await import("node:fs");
+  const journalDir = process.env.LLM_ROUTER_JOURNAL_DIR || DB_DIR;
+  mkdirSync(journalDir, { recursive: true });
+  return createPostgresAdapter({
+    connectionString,
+    dataDir: journalDir,
+    journalPath: process.env.LLM_ROUTER_JOURNAL_PATH || undefined,
+  });
+}
+
 async function initAdapter() {
   ensureDirs();
   // Order per runtime:
   //   Bun:  bun:sqlite → sql.js
   //   Node: better-sqlite3 → node:sqlite (≥22.5) → sql.js
-  let adapter = await tryBunSqlite();
+  let adapter = await tryPostgres();
+  if (adapter) {
+    // Mirror mode: DDL goes to the memory database, the mirror schema is owned
+    // by the adapter, so no SQLite driver is involved at all.
+    if (!state.logged) {
+      console.log(`[DB] Driver: postgres (mirror) | sqlite: memory`);
+      state.logged = true;
+    }
+    const { runMigrationOnce } = await import("./migrate.js");
+    await runMigrationOnce(adapter);
+    return adapter;
+  }
+  adapter = await tryBunSqlite();
   if (!adapter) adapter = await tryBetterSqlite();
   if (!adapter) adapter = await tryNodeSqlite();
   if (!adapter) adapter = await trySqlJs();

@@ -217,6 +217,15 @@ export async function runMigrationOnce(adapter) {
   if (_migratedAdapters.has(adapter)) return;
   _migratedAdapters.add(adapter);
 
+  // Fork patch #9: in mirror mode there is nothing to back up (the Postgres copy
+  // is the durable one), no legacy JSON to import (a fresh deployment), and the
+  // schema is declared in schema.js — run the chain, then reconcile the mirror.
+  if (adapter.driver === "postgres") {
+    runVersionedMigrations(adapter);
+    await adapter.syncMirrorSchemaFromTables();
+    return;
+  }
+
   // Capture freshness BEFORE migrations stamp _meta (otherwise we'd misclassify
   // a brand-new DB as non-fresh once schemaVersion is written).
   const fresh = isFreshDb(adapter);
