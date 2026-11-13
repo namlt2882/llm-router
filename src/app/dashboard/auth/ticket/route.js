@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import { setDashboardAuthCookie } from "@/lib/auth/dashboardSession";
 import { verifyWavebotTicket } from "@/lib/auth/wavebotTicket";
+import { loginLandingUrl } from "@/lib/auth/ticketOrigin.js";
 
 /**
  * Ticket exchange (fork patch; docs/wavebot-patches.md #2).
@@ -17,8 +18,7 @@ export async function GET(request) {
   const result = await verifyWavebotTicket(ticket);
 
   if (!result.ok) {
-    const target = new URL("/login?error=wavebot_ticket", url);
-    return NextResponse.redirect(target);
+    return NextResponse.redirect(loginLandingUrl(request, "/login?error=wavebot_ticket"));
   }
 
   const cookieStore = await cookies();
@@ -28,5 +28,5 @@ export async function GET(request) {
     email: result.email,
     name: result.name,
   });
-  return NextResponse.redirect(new URL("/dashboard", url));
+  return NextResponse.redirect(loginLandingUrl(request, "/dashboard"));
 }

@@ -37,6 +37,8 @@ upstream master is not green on a plain checkout.
 | 6 | `spread` strategy | `src/sse/services/auth.js`, `src/lib/db/repos/settingsRepo.js`, dashboard profile page | Scores accounts by in-flight count, then backoff, then recency before priority. |
 | 7 | Postgres-backed persistence | `src/lib/db/postgresSql.js`, `src/lib/db/postgresJournal.js`, `src/lib/db/adapters/postgresAdapter.js`, `src/lib/db/driver.js`, `src/lib/db/migrate.js` | WaveBot operates one Postgres; the router's state lives there, behind the existing synchronous repo API, with an fsync'd journal so an acked write survives a kill. |
 | 8 | Container image on `node:24-alpine` | `Dockerfile`, `.github/workflows/docker.yml` | `node:sqlite` needs Node ≥22.5; the runner must carry `pg`, so it copies the built `node_modules` instead of an upstream file list. |
+| 9 | Ticket redirects on the client's origin | `src/lib/auth/ticketOrigin.js`, `src/app/dashboard/auth/ticket/route.js` | `request.url` carries the bind address (`0.0.0.0`), so a successful login redirected to `http://0.0.0.0:20128/dashboard`. Builds the target from `Host` (+`x-forwarded-proto`). |
+| 10 | Mirror column reconciliation is case-folded | `src/lib/db/adapters/postgresAdapter.js` | Postgres lowercases unquoted columns, so the second boot re-added every camelCase column and the whole DB layer failed with `42701`. |
 
 ## Runtime environment (fork-specific)
 
@@ -57,6 +59,13 @@ upstream master is not green on a plain checkout.
   a write lands in the real table (read back through a second, plain `pg`
   client), and a **second adapter instance boots its state from Postgres**, which
   is the property the mirror exists for.
+- Live, dev stack (2026-11-13), through the real WaveBot dashboard and a real
+  upstream: forged ticket → `401 malformed`; one ticket twice → `200` then `401
+  ticket_used`; exchange → `307 /dashboard` + `auth_token` + dashboard `200`;
+  non-streaming chat on `/v1` → `200` with usage; the same `x-session-id` twice
+  logs `session pin <conn> (…) for conv:…`; `/v1` without a key → `401`; an
+  injected journal group reached Postgres after `docker kill` + start and the
+  journal truncated to 0 bytes.
 - Image: built locally from this Dockerfile; `/api/health` returns `{"ok":true}`,
   `/login` is 200, the log shows `[DB] Driver: postgres (mirror) | sqlite: memory`
   and `[DB][migrate] applied #1 initial`, and `_meta.schemaVersion=1` lands in the

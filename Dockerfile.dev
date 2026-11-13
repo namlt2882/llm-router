@@ -1,0 +1,28 @@
+# Hot-reload image for the WaveBot dev stack (docker-compose.llm.dev.yml).
+# The checkout is bind-mounted over /app by compose; this image only has to
+# carry the toolchain and the dependency tree, so node_modules lives in an
+# image-owned volume and never in the checkout.
+#
+# g++/python3/make are for the optional native sqlite driver; linux-headers for
+# better-sqlite3's build; wget for the compose healthcheck. They are installed
+# once at build time, not per boot.
+FROM node:24-alpine
+
+RUN apk add --no-cache python3 make g++ linux-headers wget
+
+WORKDIR /app
+
+# package.json only: compose mounts the checkout over /app, so a COPY of the
+# sources here would be dead weight that also defeats the mount.
+COPY package.json ./
+RUN npm install --no-audit --no-fund
+
+ENV NODE_ENV=development
+ENV PORT=20128
+ENV HOSTNAME=0.0.0.0
+ENV NEXT_TELEMETRY_DISABLED=1
+ENV DATA_DIR=/app/data
+
+EXPOSE 20128
+
+CMD ["npm", "run", "dev", "--", "--hostname", "0.0.0.0", "--port", "20128"]

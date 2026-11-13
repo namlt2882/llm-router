@@ -237,12 +237,20 @@ export async function createPostgresAdapter({ connectionString, dataDir, client,
           "SELECT column_name FROM information_schema.columns WHERE table_name = $1",
           [name],
         );
-        const existing = new Set((rows || []).map((r) => r.column_name ?? r.columnName));
+        // Postgres folds unquoted identifiers to lower case, so the mirror's
+        // own DDL produces `createdat` for the schema's `createdAt`. Comparing
+        // raw names made every boot re-issue `ALTER TABLE … ADD COLUMN
+        // createdAt` and fail the whole DB layer with 42701 ("column already
+        // exists") — found live 2026-11-13, on the second boot only, because
+        // the first boot is what creates the table.
+        const existing = new Set(
+          (rows || []).map((r) => String(r.column_name ?? r.columnName ?? "").toLowerCase()),
+        );
         // A fake/partial client may report no columns at all; skip rather than
         // re-adding every column of an existing table on every boot.
         if (!existing.size) continue;
         for (const col of Object.keys(def.columns)) {
-          if (!existing.has(col)) {
+          if (!existing.has(col.toLowerCase())) {
             await pgClient.query(`ALTER TABLE ${name} ADD COLUMN ${col} text`);
             console.log(`[DB][pg] +column ${name}.${col}`);
           }

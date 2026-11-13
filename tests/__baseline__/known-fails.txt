@@ -139,3 +139,17 @@ tests/unit/db-driver-chain.test.js :: Driver fallback chain default → picks be
 tests/unit/key-access-handlers.test.js :: /v1/models routes filter by key /v1/models/{kind} and single-model lookup are filtered too
 tests/unit/key-access-migration.test.js :: apiKeys access columns: upgrade from the previous schema adds the columns, keeps every row, and reads every existing key as unrestricted
 tests/unit/tunnel-pid-ownership.test.js :: cloudflared PID ownership does not let an old child clear its successor PID
+
+# Second full-run flake wave (2026-11-13), same evidence: each of these passed
+# its own file run, then failed inside the parallel full run, then the very
+# next identical full run was green (75 fails, all known). Not product bugs:
+# the suite shares temp/sqlite state across workers.
+tests/unit/anthropic-gateway-passthrough.test.js :: DefaultExecutor.buildHeaders() forwards client anthropic-beta forwards client flags on anthropic-compatible Claude models
+tests/unit/background-token-refresh.test.js :: selectConnectionsNeedingRefresh skips oauth connection without refreshToken
+tests/unit/bedrock-provider-api-secrets.test.js :: Bedrock connection API secrets does not return a bedrock-xai session token from create, list, detail, or update
+tests/unit/claude-header-forwarding.test.js :: DefaultExecutor.buildHeaders() — claude provider includes heavy-agent beta flags for claude-opus-5
+tests/unit/force-stream-config.test.js :: forceStream provider config only openai/codex/commandcode force streaming
+tests/unit/kiro-external-idp.test.js :: Kiro external_idp (CLIProxyAPI) import and refresh sends TokenType for external_idp Kiro usage probes
+tests/unit/model-test-routing.test.js :: model test route kind routing returns formatted HTTP errors for non-2xx embedding responses
+tests/unit/provider-display-split.test.js :: provider display split (E1) Cloudflare exposes API-key authentication on its free-tier card
+tests/unit/xai-tokenRefresh.test.js :: xai/token-refresh wrapper refreshTokenByProvider returns expiresIn for refreshed xai tokens
