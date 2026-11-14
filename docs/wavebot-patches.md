@@ -47,6 +47,7 @@ until you do. Never edit an applied migration.
 | 12 | Journal truncates only what was confirmed | `src/lib/db/adapters/postgresAdapter.js`, `src/lib/db/postgresJournal.js` | `flushOnce` truncated the WHOLE journal after awaiting Postgres, deleting the durable copy of any write that arrived mid-flush — one already acknowledged to its caller. Rewrite with the still-unconfirmed groups instead. A group also now runs BEGIN/COMMIT on ONE pooled connection: `pool.query` checks out per call, so a group could commit statement-by-statement and be dropped from the journal as if it were atomic. |
 | 13 | Plain INSERT is replay-safe | `src/lib/db/postgresSql.js` | The journal replays any group that "may or may not have reached Postgres". A plain `INSERT INTO kv(scope, key, value)` raised `23505` on the second run, and boot replay rethrows, so the mirror refused to start. A plain INSERT whose whole primary key is bound now gets `ON CONFLICT DO NOTHING`. Pinned by `tests/unit/postgres-sql.test.js`; the statement was also probed on the real database (duplicate raises `kv_pkey`, DO NOTHING leaves one row). **Known limitation:** `usageHistory` has a serial id that is not in the column list, so a replayed row gets a NEW id and is double-counted. The window is a crash between Postgres COMMIT and the journal rewrite. It is not closed here. |
 | 14 | `requireLogin=false` cannot open a ticket-gated router | `src/dashboardGuard.js` | Stock 9router has a "require login" toggle that makes `/dashboard` and the protected `/api/*` paths public. With `WAVEBOT_AUTH_URL` set the ticket is the only door, so the toggle is ignored (`loginOptional`). Outside WaveBot mode behaviour is unchanged. Pinned by `tests/unit/dashboard-guard-wavebot.test.js`. |
+| 15 | Dev server accepts a configured Origin | `next.config.mjs` | The local stack runs `next dev`, and Next blocks its own `/_next` dev resources (chunks, the HMR socket) when the browser's `Origin` is not loopback. Reaching the dev router on a LAN/Tailscale name therefore painted the app shell and then stuck on "Loading..." while every `/login` HTML response still answered 200. `ALLOWED_DEV_ORIGINS` (comma-separated) feeds `allowedDevOrigins`; empty by default, so loopback is unchanged and an unlisted Origin still gets 403. Deployment never met this: it serves a production build, where the check does not exist. |
 
 ## Runtime environment (fork-specific)
 
@@ -57,6 +58,7 @@ until you do. Never edit an applied migration.
 | `WAVEBOT_AUTH_URL` | WaveBot base URL the ticket is verified against. Set ⇒ password login is off and the dashboard is reached only through a ticket. |
 | `ACCOUNT_MAX_INFLIGHT` | Per-account in-flight cap (default 4). |
 | `JWT_SECRET` | Dashboard session cookie signing key. Required. |
+| `ALLOWED_DEV_ORIGINS` | Comma-separated hostnames the **dev** server accepts as a cross-origin source for `/_next` resources (`allowedDevOrigins`). Empty by default; loopback always works. Production builds ignore it. |
 
 ## Verification performed on this fork (2026-11-13)
 

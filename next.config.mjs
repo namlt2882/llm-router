@@ -44,6 +44,13 @@ const nextConfig = {
   images: {
     unoptimized: true
   },
+  // The local WaveBot stack runs `next dev`, which blocks its own /_next dev
+  // resources (client chunks, the HMR socket) when the browser Origin is not
+  // loopback — reaching the dev router on a LAN/Tailscale name otherwise
+  // paints the shell and sticks on "Loading..." while /login still answers
+  // 200. Comma-separated, empty by default (loopback needs nothing). A
+  // production build has no such check, so this never affects a deployment.
+  allowedDevOrigins: (process.env.ALLOWED_DEV_ORIGINS || "").split(",").map((s) => s.trim()).filter(Boolean),
   env: {},
   experimental: {
     // #1529/#1572: LLM clients can send long context or base64 image payloads through /v1 rewrites.
