@@ -57,11 +57,93 @@ export function releaseAccountSlot(connectionId) {
   if (!connectionId) return;
   const entry = live(connectionId);
   if (!entry) return;
-  if (entry.count <= 1) {
-    slots.delete(connectionId);
-    return;
+  if (entry.count <= 1) slots.delete(connectionId);
+  else slots.set(connectionId, { count: entry.count - 1, expiresAt: entry.expiresAt });
+  wakeWaiters();
+}
+
+/**
+ * Fork patch #12: priority-ordered upstream wait at the cap.
+ *
+ * When every candidate account is at its in-flight cap a request used to get
+ * `account_busy` at once. WaveBot now tags each call with
+ * `x-wavebot-priority: interactive|background`; a capped request waits (up to
+ * `upstream_wait_ms`) in a queue ordered interactive first, then FIFO. A
+ * release wakes EVERY waiter in that order; each retries selection through
+ * auth.js's mutex, which is FIFO, so the order of retries is the order of the
+ * queue, and a loser simply re-queues with its original ticket (its place is
+ * kept). The queue is process memory: a restart drops it, and waits last
+ * seconds, so that is acceptable.
+ */
+const PRIORITY_HEADER = "x-wavebot-priority";
+const BUSY_WINDOW_MS = 5 * 60 * 1000;
+let ticketSeq = 0;
+/** ticket -> { wake(boolean) } for tickets currently waiting */
+const waiting = new Map();
+let busyStamps = [];
+
+export function parsePriority(headers) {
+  let raw = null;
+  if (headers && typeof headers.get === "function") raw = headers.get(PRIORITY_HEADER);
+  else if (headers) raw = headers[PRIORITY_HEADER] ?? headers[PRIORITY_HEADER.toUpperCase()] ?? null;
+  return String(raw || "").toLowerCase() === "interactive" ? "interactive" : "background";
+}
+
+export function createWaitTicket(priority = "background") {
+  return { priority: priority === "interactive" ? "interactive" : "background", seq: ++ticketSeq, enqueuedAt: Date.now() };
+}
+
+function ordered() {
+  return [...waiting.keys()].sort(
+    (a, b) => (a.priority === b.priority ? 0 : a.priority === "interactive" ? -1 : 1) || a.seq - b.seq,
+  );
+}
+
+function wakeWaiters() {
+  for (const ticket of ordered()) {
+    const entry = waiting.get(ticket);
+    waiting.delete(ticket);
+    entry?.wake(true);
   }
-  slots.set(connectionId, { count: entry.count - 1, expiresAt: entry.expiresAt });
+}
+
+/** Resolves true when woken by a release, false on timeout, abort or waitMs <= 0. */
+export function waitForCapacity(ticket, waitMs, signal) {
+  if (!(waitMs > 0) || signal?.aborted) return Promise.resolve(false);
+  return new Promise((resolve) => {
+    let timer = null;
+    const done = (value) => {
+      if (timer) clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
+      resolve(value);
+    };
+    const onAbort = () => {
+      waiting.delete(ticket);
+      done(false);
+    };
+    timer = setTimeout(() => {
+      waiting.delete(ticket);
+      done(false);
+    }, waitMs);
+    signal?.addEventListener("abort", onAbort, { once: true });
+    waiting.set(ticket, { wake: done });
+  });
+}
+
+export function recordAccountBusy() {
+  busyStamps.push(Date.now());
+}
+
+export function getQueueStats() {
+  const now = Date.now();
+  busyStamps = busyStamps.filter((t) => now - t < BUSY_WINDOW_MS);
+  const queued = { interactive: 0, background: 0 };
+  let oldest = 0;
+  for (const ticket of waiting.keys()) {
+    queued[ticket.priority] += 1;
+    oldest = Math.max(oldest, now - ticket.enqueuedAt);
+  }
+  return { queued, oldestWaitMs: oldest, busy5m: busyStamps.length };
 }
 
 /**
@@ -115,4 +197,17 @@ export function releaseSlotWithBody(response, connectionId) {
 /** Test-only. */
 export function __resetAccountInflight() {
   slots.clear();
+  waiting.clear();
+  busyStamps = [];
+}
+
+let upstreamWaitMsOverride = null;
+/** How long a capped request may wait; 0 keeps the immediate account_busy. */
+export function getUpstreamWaitMs() {
+  if (upstreamWaitMsOverride !== null) return upstreamWaitMsOverride;
+  const raw = Number(process.env.UPSTREAM_WAIT_MS);
+  return Number.isInteger(raw) && raw >= 0 ? raw : 0;
+}
+export function setUpstreamWaitMs(ms) {
+  upstreamWaitMsOverride = Number.isInteger(ms) && ms >= 0 ? ms : null;
 }

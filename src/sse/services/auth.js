@@ -7,7 +7,14 @@ import { getAntigravityQuotaCache, getAntigravityModelQuota } from "./antigravit
 // Fork patch #4: session → account affinity (see sessionPin.js).
 import { getPinnedConnectionId } from "./sessionPin.js";
 // Fork patch #5: per-account in-flight cap, acquired inside the selection mutex.
-import { accountInflightLimit, getInflightCount, tryAcquireAccountSlot } from "./accountInflight.js";
+import {
+  accountInflightLimit,
+  getInflightCount,
+  tryAcquireAccountSlot,
+  createWaitTicket,
+  waitForCapacity,
+  recordAccountBusy,
+} from "./accountInflight.js";
 import * as log from "../utils/logger.js";
 
 // Mutex to prevent race conditions during account selection
@@ -30,6 +37,23 @@ function githubMonthlyResetMs(status, errorText, provider) {
  * @param {string|null} model - Model name for per-model rate limit filtering
  */
 export async function getProviderCredentials(provider, excludeConnectionIds = null, model = null, options = {}) {
+  // Fork patch #12: at the in-flight cap, wait (priority-ordered) instead of
+  // answering account_busy at once. The wait is OUTSIDE the selection mutex.
+  const waitMs = Number(options?.upstreamWaitMs) > 0 ? Number(options.upstreamWaitMs) : 0;
+  const deadline = Date.now() + waitMs;
+  const ticket = createWaitTicket(options?.priority);
+  for (;;) {
+    const result = await selectProviderCredentials(provider, excludeConnectionIds, model, options);
+    if (result?.lastErrorCode !== "account_busy") return result;
+    const remaining = deadline - Date.now();
+    if (remaining <= 0 || !(await waitForCapacity(ticket, remaining))) {
+      recordAccountBusy();
+      return result;
+    }
+  }
+}
+
+async function selectProviderCredentials(provider, excludeConnectionIds = null, model = null, options = {}) {
   // Normalize to Set for consistent handling
   const excludeSet = excludeConnectionIds instanceof Set
     ? excludeConnectionIds

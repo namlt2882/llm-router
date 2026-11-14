@@ -89,3 +89,40 @@ describe("in-flight cap at selection", () => {
     expect(pick.retryAfter).toBe("2026-11-13T10:00:00.000Z");
   });
 });
+
+describe("priority wait at the cap", () => {
+  it("waits for a release instead of answering busy, interactive first", async () => {
+    vi.stubEnv("ACCOUNT_MAX_INFLIGHT", "1");
+    const { releaseAccountSlot } = await import("../../src/sse/services/accountInflight.js");
+    tryAcquireAccountSlot("a", 1);
+    tryAcquireAccountSlot("b", 1);
+    const got = [];
+    const bg = getProviderCredentials("openai", null, "m", { priority: "background", upstreamWaitMs: 5000 }).then((r) => got.push(["bg", r.connectionId]));
+    const ia = getProviderCredentials("openai", null, "m", { priority: "interactive", upstreamWaitMs: 5000 }).then((r) => got.push(["ia", r.connectionId]));
+    await new Promise((r) => setTimeout(r, 20));
+    releaseAccountSlot("a");
+    await new Promise((r) => setTimeout(r, 20));
+    expect(got).toEqual([["ia", "a"]]);
+    releaseAccountSlot("b");
+    await Promise.all([bg, ia]);
+    expect(got).toEqual([["ia", "a"], ["bg", "b"]]);
+  });
+
+  it("falls back to account_busy when the wait times out", async () => {
+    vi.stubEnv("ACCOUNT_MAX_INFLIGHT", "1");
+    tryAcquireAccountSlot("a", 1);
+    tryAcquireAccountSlot("b", 1);
+    const pick = await getProviderCredentials("openai", null, "m", { priority: "background", upstreamWaitMs: 50 });
+    expect(pick.lastErrorCode).toBe("account_busy");
+  });
+
+  it("upstreamWaitMs 0 answers busy at once (today's behaviour)", async () => {
+    vi.stubEnv("ACCOUNT_MAX_INFLIGHT", "1");
+    tryAcquireAccountSlot("a", 1);
+    tryAcquireAccountSlot("b", 1);
+    const t0 = Date.now();
+    const pick = await getProviderCredentials("openai", null, "m", { priority: "interactive", upstreamWaitMs: 0 });
+    expect(pick.lastErrorCode).toBe("account_busy");
+    expect(Date.now() - t0).toBeLessThan(200);
+  });
+});
