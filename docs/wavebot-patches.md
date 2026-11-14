@@ -8,8 +8,9 @@ divergent product: keep every patch small, self-contained and commented, so
 - Upstream: <https://github.com/decolua/9router> (`upstream/master`)
 - Written against: `1855aa44` — upstream master, package version 0.5.116
   (package.json), commit subject "# v0.5.119 (2026-11-11)"
-- Image: `ghcr.io/namlt2882/llm-router:wavebot-main` (published by
-  `.github/workflows/docker.yml`)
+- Image: none — the deploy host builds this checkout from the compose
+  `build:` context (`wavebot/docker-compose.llm.yml`); ruling 2026-11-14
+  removed `.github/workflows/docker.yml` and with it the GHCR publishing.
 
 ## Update procedure
 
@@ -40,7 +41,7 @@ until you do. Never edit an applied migration.
 | 5 | Per-account in-flight cap | `src/sse/services/accountInflight.js`, `src/sse/services/auth.js`, `open-sse/handlers/chatCore.js`, `open-sse/utils/stream.js` | A leaked slot is bounded by TTL; a full account is skipped, and all-full answers a retryable 503 instead of "no credentials". An account that fills between being chosen and taking its slot also answers `account_busy` rather than being served anyway (`tests/unit/auth-slot-race.test.js`). |
 | 6 | `spread` strategy | `src/sse/services/auth.js`, `src/lib/db/repos/settingsRepo.js`, dashboard profile page | Scores accounts by in-flight count, then backoff, then recency before priority. |
 | 7 | Postgres-backed persistence | `src/lib/db/postgresSql.js`, `src/lib/db/postgresJournal.js`, `src/lib/db/adapters/postgresAdapter.js`, `src/lib/db/driver.js`, `src/lib/db/migrate.js` | WaveBot operates one Postgres; the router's state lives there, behind the existing synchronous repo API, with an fsync'd journal so an acked write survives a kill. The router never creates or alters Postgres tables: the schema is `db/migrations/*.sql`, applied by goose (WaveBot's `migrate` job / `make migrate`) before the router boots. An unmigrated database fails with `relation "settings" does not exist`. `tests/unit/migrations-drift.test.js` fails when `schema.js` and the migrations disagree. |
-| 8 | Container image on `node:24-alpine` | `Dockerfile`, `.github/workflows/docker.yml` | `node:sqlite` needs Node ≥22.5; the runner must carry `pg`, so it copies the built `node_modules` instead of an upstream file list. |
+| 8 | Container image on `node:24-alpine` | `Dockerfile` | `node:sqlite` needs Node ≥22.5; the runner must carry `pg`, so it copies the built `node_modules` instead of an upstream file list. Built by the deploy host from the compose `build:` context — the GHCR workflow was removed on 2026-11-14 (the registry is no longer used). `Dockerfile.dev` (hot-reload dev image) predates this patch. |
 | 9 | Ticket redirects on the client's origin | `src/lib/auth/ticketOrigin.js`, `src/app/dashboard/auth/ticket/route.js` | `request.url` carries the bind address (`0.0.0.0`), so a successful login redirected to `http://0.0.0.0:20128/dashboard`. Builds the target from `Host` (+`x-forwarded-proto`). |
 | 10 | _(retired)_ | — | Mirror column reconciliation was removed with the boot DDL; goose owns the schema (patch 7). |
 | 11 | Every slot acquirer releases it | `src/sse/handlers/{tts,stt,embeddings,search,fetch,systemone,videoGeneration,imageGeneration}.js`, `src/sse/services/systemoneRouter.js`, `src/app/api/v1beta/models/[...path]/route.js`, `open-sse/handlers/chatCore.js`, `src/sse/services/accountInflight.js` | Patch #5 takes the slot inside `getProviderCredentials` for EVERY caller, but only the chat path released it: four image/TTS/search calls wedged an account into `account_busy` for the whole 10-minute TTL. Pinned by `tests/unit/nonchat-slot-release.test.js` (a module that acquires must release) and `tests/unit/nonchat-slot-behaviour.test.js`. When the RESPONSE IS A LIVE STREAM (codex image generation, the Gemini-native proxy) the release must follow the body, not the return: `releaseSlotWithBody` wraps it and frees the account on end/error/cancel — a `finally` released before the client read a byte, so four parallel streams looked like one in flight. Pinned by `tests/unit/slot-release-with-body.test.js` and `tests/unit/image-slot-streaming.test.js`. |
