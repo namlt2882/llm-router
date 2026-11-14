@@ -14,6 +14,8 @@ import {
   createWaitTicket,
   waitForCapacity,
   recordAccountBusy,
+  setRuntimeLimits,
+  getUpstreamWaitMs,
 } from "./accountInflight.js";
 import * as log from "../utils/logger.js";
 
@@ -37,9 +39,17 @@ function githubMonthlyResetMs(status, errorText, provider) {
  * @param {string|null} model - Model name for per-model rate limit filtering
  */
 export async function getProviderCredentials(provider, excludeConnectionIds = null, model = null, options = {}) {
-  // Fork patch #12: at the in-flight cap, wait (priority-ordered) instead of
+  // Fork patch #18: at the in-flight cap, wait (priority-ordered) instead of
   // answering account_busy at once. The wait is OUTSIDE the selection mutex.
-  const waitMs = Number(options?.upstreamWaitMs) > 0 ? Number(options.upstreamWaitMs) : 0;
+  try {
+    const stored = await getSettings();
+    setRuntimeLimits({ accountMaxInflight: stored?.accountMaxInflight, upstreamWaitMs: stored?.upstreamWaitMs });
+  } catch {
+    // keep the last applied limits
+  }
+  // Only callers that opt in (chat) wait; every other handler keeps the immediate account_busy.
+  const asked = options?.upstreamWaitMs ?? (options?.wait ? getUpstreamWaitMs() : 0);
+  const waitMs = Number(asked) > 0 ? Number(asked) : 0;
   const deadline = Date.now() + waitMs;
   const ticket = createWaitTicket(options?.priority);
   for (;;) {

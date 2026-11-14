@@ -1,9 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const h = vi.hoisted(() => ({ connections: [], locked: new Set() }));
+const h = vi.hoisted(() => ({ connections: [], locked: new Set(), settings: {} }));
 vi.mock("@/lib/localDb", () => ({
   getProviderConnections: async () => h.connections,
-  getSettings: async () => ({ fallbackStrategy: "fill-first" }),
+  getSettings: async () => ({ fallbackStrategy: "fill-first", ...h.settings }),
   updateProviderConnection: vi.fn(async () => {}),
   validateApiKey: async () => true,
   getProxyPools: async () => [],
@@ -54,6 +54,7 @@ const conn = (id, priority) => ({
 beforeEach(() => {
   __resetAccountInflight();
   h.locked.clear();
+  h.settings = {};
   vi.unstubAllEnvs();
   h.connections = [conn("a", 1), conn("b", 2)];
 });
@@ -122,6 +123,27 @@ describe("priority wait at the cap", () => {
     tryAcquireAccountSlot("b", 1);
     const t0 = Date.now();
     const pick = await getProviderCredentials("openai", null, "m", { priority: "interactive", upstreamWaitMs: 0 });
+    expect(pick.lastErrorCode).toBe("account_busy");
+    expect(Date.now() - t0).toBeLessThan(200);
+  });
+
+  it("a raised upstream_wait_ms makes a capped chat request wait instead of account_busy", async () => {
+    const { releaseAccountSlot } = await import("../../src/sse/services/accountInflight.js");
+    h.settings = { accountMaxInflight: 1, upstreamWaitMs: 5000 };
+    tryAcquireAccountSlot("a", 1);
+    tryAcquireAccountSlot("b", 1);
+    const waited = getProviderCredentials("openai", null, "m", { priority: "interactive", wait: true });
+    await new Promise((r) => setTimeout(r, 20));
+    releaseAccountSlot("a");
+    expect((await waited).connectionId).toBe("a");
+  });
+
+  it("a caller that does not opt in keeps the immediate account_busy even with a wait configured", async () => {
+    h.settings = { accountMaxInflight: 1, upstreamWaitMs: 5000 };
+    tryAcquireAccountSlot("a", 1);
+    tryAcquireAccountSlot("b", 1);
+    const t0 = Date.now();
+    const pick = await getProviderCredentials("openai", null, "m");
     expect(pick.lastErrorCode).toBe("account_busy");
     expect(Date.now() - t0).toBeLessThan(200);
   });

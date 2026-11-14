@@ -7,7 +7,7 @@ import {
   extractApiKey,
   isValidApiKey,
 } from "../services/auth.js";
-import { parsePriority, getUpstreamWaitMs } from "../services/accountInflight.js";
+import { parsePriority } from "../services/accountInflight.js";
 import { handleAntigravityQuotaError, clearAntigravityStrikes } from "../services/antigravityQuota.js";
 import { getSettings } from "@/lib/localDb";
 import { getModelInfo, getComboModels } from "../services/model.js";
@@ -284,9 +284,9 @@ async function handleSingleModelChat(body, modelStr, clientRawRequest = null, re
       requestedModel: requestedModel || model,
       // Fork patch #4: keep this conversation on one account while it is up.
       sessionId,
-      // Fork patch #12: the caller's tier, and how long a capped request may wait.
+      // Fork patch #18: the caller's tier, and how long a capped request may wait (read in auth.js from settings).
       priority: parsePriority(request.headers),
-      upstreamWaitMs: getUpstreamWaitMs(),
+      wait: true,
     });
 
     // All accounts unavailable

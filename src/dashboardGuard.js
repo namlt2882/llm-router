@@ -71,6 +71,8 @@ const PROTECTED_API_PATHS = [
   "/api/mcp",
   "/api/translator",
   "/api/tunnel",
+  // Fork patch #18: the routes authenticate themselves (bearer or ticket session).
+  "/api/fork",
 ];
 
 // Routes that spawn child processes or read host secrets — restrict to localhost.

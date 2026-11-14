@@ -74,6 +74,10 @@ const DEFAULT_SETTINGS = {
   pxpipeTimeoutMs: 15000,
   // Per-provider user header overrides applied at dispatch: { [providerId]: { headers: {..} } }
   providerOverrides: {},
+  // Fork patch #18: runtime-editable concurrency knobs. null = fall back to the
+  // ACCOUNT_MAX_INFLIGHT env / no upstream wait.
+  accountMaxInflight: null,
+  upstreamWaitMs: null,
 };
 
 async function readRaw() {

@@ -33,9 +33,29 @@ function live(connectionId) {
   return entry;
 }
 
+/** Runtime values from the settings repo (fork patch #18); null = use env/default. */
+let runtimeLimit = null;
+let runtimeWaitMs = null;
+
+export function setRuntimeLimits({ accountMaxInflight, upstreamWaitMs } = {}) {
+  runtimeLimit = Number.isInteger(accountMaxInflight) && accountMaxInflight > 0 ? accountMaxInflight : null;
+  runtimeWaitMs = Number.isInteger(upstreamWaitMs) && upstreamWaitMs >= 0 ? upstreamWaitMs : null;
+}
+
 export function accountInflightLimit() {
+  if (runtimeLimit !== null) return runtimeLimit;
   const raw = Number(process.env.ACCOUNT_MAX_INFLIGHT);
   return Number.isInteger(raw) && raw > 0 ? raw : DEFAULT_LIMIT;
+}
+
+/** Live per-account in-flight counts, for the load endpoint. */
+export function getInflightSnapshot() {
+  const out = [];
+  for (const id of [...slots.keys()]) {
+    const count = getInflightCount(id);
+    if (count > 0) out.push({ id, inflight: count });
+  }
+  return out;
 }
 
 export function getInflightCount(connectionId) {
@@ -63,7 +83,7 @@ export function releaseAccountSlot(connectionId) {
 }
 
 /**
- * Fork patch #12: priority-ordered upstream wait at the cap.
+ * Fork patch #18: priority-ordered upstream wait at the cap.
  *
  * When every candidate account is at its in-flight cap a request used to get
  * `account_busy` at once. WaveBot now tags each call with
@@ -196,6 +216,8 @@ export function releaseSlotWithBody(response, connectionId) {
 
 /** Test-only. */
 export function __resetAccountInflight() {
+  runtimeLimit = null;
+  runtimeWaitMs = null;
   slots.clear();
   waiting.clear();
   busyStamps = [];
@@ -205,6 +227,7 @@ let upstreamWaitMsOverride = null;
 /** How long a capped request may wait; 0 keeps the immediate account_busy. */
 export function getUpstreamWaitMs() {
   if (upstreamWaitMsOverride !== null) return upstreamWaitMsOverride;
+  if (runtimeWaitMs !== null) return runtimeWaitMs;
   const raw = Number(process.env.UPSTREAM_WAIT_MS);
   return Number.isInteger(raw) && raw >= 0 ? raw : 0;
 }

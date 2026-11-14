@@ -89,6 +89,7 @@ describe("chat session identity", () => {
       requestedModel: "gpt-4o-mini",
       sessionId: "conv:c1",
       priority: "background",
+      wait: true,
     });
     expect(mocks.pinSession).toHaveBeenCalledWith("openai", "conv:c1", "acct-1");
   });
