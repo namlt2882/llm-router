@@ -21,6 +21,9 @@ vi.mock("../../src/sse/services/accountInflight.js", () => ({
   getInflightCount: (id) => h.inflight[id] || 0,
   tryAcquireAccountSlot: () => true,
   releaseAccountSlot: () => {},
+  createWaitTicket: () => ({}),
+  waitForCapacity: async () => false,
+  recordAccountBusy: () => {},
   __resetAccountInflight: () => {},
 }));
 vi.mock("../../src/sse/utils/logger.js", () => ({ info: vi.fn(), warn: vi.fn(), debug: vi.fn(), error: vi.fn() }));

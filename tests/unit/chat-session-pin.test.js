@@ -85,9 +85,10 @@ describe("chat session identity", () => {
       }),
     });
     await handleChat(request);
-    expect(mocks.getProviderCredentials.mock.calls[0][3]).toEqual({
+    expect(mocks.getProviderCredentials.mock.calls[0][3]).toMatchObject({
       requestedModel: "gpt-4o-mini",
       sessionId: "conv:c1",
+      priority: "background",
     });
     expect(mocks.pinSession).toHaveBeenCalledWith("openai", "conv:c1", "acct-1");
   });
