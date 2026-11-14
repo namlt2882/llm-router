@@ -161,6 +161,15 @@ async function hasValidApiKey(request) {
 }
 
 async function canAccessPublicLlmApi(request) {
+  // Fork patch: `requireApiKey: false` is the WaveBot topology's standing
+  // state — the single client (the WaveBot dashboard) does all plan admission
+  // itself, and the fork hides every way to expose /v1 beyond the compose
+  // network (src/lib/fork/exposureUi.js). The stock gate below demands
+  // loopback, a CLI token or an API key even from that one trusted peer, so
+  // it must step aside when the setting says no key. A settings read failure
+  // falls through to stock behavior: never open by accident.
+  const settings = await loadSettings();
+  if (settings && settings.requireApiKey === false) return true;
   if (isLocalRequest(request)) return true;
   if (await hasValidCliToken(request)) return true;
   return await hasValidApiKey(request);

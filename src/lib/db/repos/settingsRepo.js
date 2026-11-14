@@ -27,7 +27,11 @@ const DEFAULT_SETTINGS = {
     videoInput: { enabled: false, roundRobin: false, models: [] },
   },
   requireLogin: true,
-  requireApiKey: true,
+  // Fork patch: `/v1` serves one trusted client (the WaveBot dashboard, which
+  // does all plan admission itself) inside the compose network — no shared API
+  // key beside that boundary. Owner decision 2026-11-14, overriding the
+  // original `requireApiKey: true` design; docs/wavebot-patches.md.
+  requireApiKey: false,
   tunnelDashboardAccess: true,
   authMode: "password",
   ssoType: "oidc",

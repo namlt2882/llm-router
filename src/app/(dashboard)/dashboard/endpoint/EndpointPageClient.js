@@ -19,6 +19,7 @@ import StatusAlert from "./components/StatusAlert";
 import Tooltip from "./components/Tooltip";
 import SecurityWarning from "./components/SecurityWarning";
 import KeyAccessControls from "./components/KeyAccessControls";
+import { SHOW_EXPOSURE_UI } from "@/lib/fork/exposureUi";
 export default function APIPageClient({ machineId }) {
   const [keys, setKeys] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -747,6 +748,9 @@ export default function APIPageClient({ machineId }) {
             copied={copied}
             onCopy={copy}
           />
+          {/* Fork: Tunnel/Tailscale publish the endpoint beyond the compose
+              network — no role in the WaveBot deployment. */}
+          {SHOW_EXPOSURE_UI && (<>
           {/* Cloudflare Tunnel */}
           <div className="flex items-center gap-2">
             <span className={`text-xs font-mono px-1.5 py-0.5 rounded shrink-0 min-w-[88px] text-center ${
@@ -923,8 +927,10 @@ export default function APIPageClient({ machineId }) {
               </Button>
             )}
           </div>
+          </>)}
         </div>
 
+        {SHOW_EXPOSURE_UI && (<>
         {/* Pre-enable security gate banner */}
         {isLoginUnsafe && !tunnelEnabled && !tsEnabled && (
           <div className="mt-4">
@@ -973,9 +979,11 @@ export default function APIPageClient({ machineId }) {
             </div>
           </div>
         )}
+        </>)}
       </Card>
 
-      {/* API Keys */}
+      {/* API Keys — fork: no shared API key beside the WaveBot plan boundary. */}
+      {SHOW_EXPOSURE_UI && (
       <Card id="require-api-key">
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-lg font-semibold flex items-center gap-2">
@@ -1101,6 +1109,7 @@ export default function APIPageClient({ machineId }) {
           </div>
         )}
       </Card>
+      )}
 
       {/* Add Key Modal */}
       <Modal
