@@ -170,6 +170,16 @@ async function canAccessPublicLlmApi(request) {
   // loopback, a CLI token or an API key even from that one trusted peer, so
   // it must step aside when the setting says no key. A settings read failure
   // falls through to stock behavior: never open by accident.
+  //
+  // LLM_ROUTER_REQUIRE_API_KEY=false is the deployment's own declaration of
+  // that same topology, read straight from the environment — the one channel
+  // that works everywhere. Live prod (2026-11-15) hit the gap this closes:
+  // the production proxy bundle could not read the settings row (dev never
+  // noticed because NODE_ENV=development carries a host-header loopback
+  // fallback), loadSettings() swallowed the error, and the one trusted client
+  // got the stock 401 with an empty settings table. Set it in the compose
+  // stack; any other value (or unset) keeps every gate below.
+  if (process.env.LLM_ROUTER_REQUIRE_API_KEY === "false") return true;
   const settings = await loadSettings();
   if (settings && settings.requireApiKey === false) return true;
   if (isLocalRequest(request)) return true;

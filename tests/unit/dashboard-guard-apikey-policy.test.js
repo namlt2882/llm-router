@@ -78,4 +78,37 @@ describe("proxy honors the fork's requireApiKey:false for /v1", () => {
       body: { error: "API key required for remote API access" },
     });
   });
+
+  // The prod proxy bundle may be unable to read settings at all (the 401 that
+  // reached WaveBot on 2026-11-15 with an empty settings table — the same
+  // code serves dev fine only because NODE_ENV=development carries a host
+  // header fallback the production runtime does not). The compose stack then
+  // declares the topology itself: LLM_ROUTER_REQUIRE_API_KEY=false opens the
+  // gate the way the stored setting would, even when the read below throws.
+  it("opens on LLM_ROUTER_REQUIRE_API_KEY=false even when settings are unreadable", async () => {
+    vi.stubEnv("LLM_ROUTER_REQUIRE_API_KEY", "false");
+    mocks.getSettings.mockRejectedValue(new Error("db down"));
+    await expect(proxy(request("/v1/models"))).resolves.toBe(mocks.nextResponse);
+    await expect(proxy(request("/v1/chat/completions"))).resolves.toBe(mocks.nextResponse);
+  });
+
+  it("lets the env declaration win over a stored requireApiKey:true", async () => {
+    vi.stubEnv("LLM_ROUTER_REQUIRE_API_KEY", "false");
+    mocks.getSettings.mockResolvedValue({ requireApiKey: true, requireLogin: true });
+    await expect(proxy(request("/v1/models"))).resolves.toBe(mocks.nextResponse);
+  });
+
+  it("keeps the gate shut for other env values", async () => {
+    vi.stubEnv("LLM_ROUTER_REQUIRE_API_KEY", "true");
+    mocks.getSettings.mockRejectedValue(new Error("db down"));
+    await expect(proxy(request("/v1/models"))).resolves.toEqual({
+      status: 401,
+      body: { error: "API key required for remote API access" },
+    });
+    vi.stubEnv("LLM_ROUTER_REQUIRE_API_KEY", "");
+    await expect(proxy(request("/v1/models"))).resolves.toEqual({
+      status: 401,
+      body: { error: "API key required for remote API access" },
+    });
+  });
 });
