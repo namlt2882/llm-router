@@ -43,4 +43,22 @@ describe("verifyWavebotTicket", () => {
       reason: "rejected",
     });
   });
+
+  // 5 s was enough for a warm route, but the verify endpoint is compiled
+  // lazily by `next dev` on its first hit and a full rebuild took 5.4 s live —
+  // WaveBot answered 200 *after* this abort fired, the exchange died with
+  // `error=wavebot_ticket`, and the first click after every dashboard restart
+  // failed. 15 s still caps a genuinely hung WaveBot.
+  it("waits 15 s for WaveBot by default, and an explicit timeoutMs still wins", async () => {
+    const spy = vi.spyOn(AbortSignal, "timeout").mockImplementation(() => AbortSignal.abort());
+    const fetchImpl = vi.fn(async () => ok({ ok: true, userId: "u1" }));
+    try {
+      await verifyWavebotTicket("t", { authUrl: "http://wb", fetchImpl });
+      expect(spy).toHaveBeenLastCalledWith(15_000);
+      await verifyWavebotTicket("t", { authUrl: "http://wb", fetchImpl, timeoutMs: 1234 });
+      expect(spy).toHaveBeenLastCalledWith(1234);
+    } finally {
+      spy.mockRestore();
+    }
+  });
 });

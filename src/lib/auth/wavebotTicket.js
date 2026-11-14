@@ -12,6 +12,14 @@
  * Returns, never throws: a network failure is a login refusal, not a 500.
  */
 
+/** Abort cap for the verify POST. 5 s was enough for a warm route, but
+ *  `next dev` compiles the verify endpoint lazily on its first hit and a full
+ *  rebuild took 5.4 s live (2026-11-14): WaveBot answered 200 *after* the
+ *  abort fired, and the first "Open router dashboard" click after every
+ *  dashboard restart died with `error=wavebot_ticket`. 15 s still caps a
+ *  genuinely hung WaveBot; a production build answers in milliseconds. */
+export const VERIFY_TIMEOUT_MS = 15_000;
+
 /**
  * @param {string} ticket
  * @param {{ authUrl?: string, fetchImpl?: typeof fetch, timeoutMs?: number }} [opts]
@@ -21,7 +29,7 @@
 export async function verifyWavebotTicket(ticket, opts = {}) {
   const authUrl = (opts.authUrl ?? process.env.WAVEBOT_AUTH_URL ?? "").trim().replace(/\/+$/, "");
   const fetchImpl = opts.fetchImpl ?? fetch;
-  const timeoutMs = opts.timeoutMs ?? 5000;
+  const timeoutMs = opts.timeoutMs ?? VERIFY_TIMEOUT_MS;
 
   if (!authUrl || typeof ticket !== "string" || !ticket) {
     return { ok: false, reason: "rejected" };
