@@ -6,9 +6,11 @@ import { getStatusVariant as getConnectionStatusVariant } from "@/shared/utils/c
 import PropTypes from "prop-types";
 import { Badge, Toggle, Tooltip } from "@/shared/components";
 import CooldownTimer from "./CooldownTimer";
+import DiagnosticModelsPicker from "./DiagnosticModelsPicker";
 
-export default function ConnectionRow({ connection, proxyPools, isOAuth, isFirst, isLast, onMoveUp, onMoveDown, onToggleActive, onUpdateProxy, onEdit, onDelete, oneByOneStatus = null, autoPing = null }) {
+export default function ConnectionRow({ connection, proxyPools, isOAuth, isFirst, isLast, onMoveUp, onMoveDown, onToggleActive, onUpdateProxy, onEdit, onDelete, oneByOneStatus = null, autoPing = null, diagnosticModelOptions = null, diagnosticModels = null, onSaveDiagnosticModels = null }) {
   const [showProxyDropdown, setShowProxyDropdown] = useState(false);
+  const [showDiagnostic, setShowDiagnostic] = useState(false);
   const [updatingProxy, setUpdatingProxy] = useState(false);
   const proxyDropdownRef = useRef(null);
   const proxyBtnRef = useRef(null);
@@ -183,6 +185,7 @@ export default function ConnectionRow({ connection, proxyPools, isOAuth, isFirst
   };
 
   return (
+    <>
     <div className={`group flex min-w-0 flex-col gap-3 rounded-lg p-2 transition-colors hover:bg-black/[0.02] dark:hover:bg-white/[0.02] sm:flex-row sm:items-center sm:justify-between ${connection.isActive === false ? "opacity-60" : ""}`}>
       <div className="flex min-w-0 flex-1 items-start gap-2 sm:items-center sm:gap-3">
         {/* Priority arrows */}
@@ -310,6 +313,15 @@ export default function ConnectionRow({ connection, proxyPools, isOAuth, isFirst
               </button>
             </Tooltip>
           )}
+          {onSaveDiagnosticModels && (
+            <button
+              onClick={() => setShowDiagnostic((v) => !v)}
+              className={`flex w-full flex-col items-center rounded px-2 py-1 transition-colors hover:bg-black/5 dark:hover:bg-white/5 ${(diagnosticModels?.length || showDiagnostic) ? "text-primary" : "text-text-muted hover:text-primary"}`}
+            >
+              <span className="material-symbols-outlined text-[18px]">speed</span>
+              <span className="text-[10px] leading-tight">Quét</span>
+            </button>
+          )}
           <button onClick={onEdit} className="flex flex-col items-center rounded px-2 py-1 text-text-muted hover:bg-black/5 hover:text-primary dark:hover:bg-white/5">
             <span className="material-symbols-outlined text-[18px]">edit</span>
             <span className="text-[10px] leading-tight">Edit</span>
@@ -327,6 +339,18 @@ export default function ConnectionRow({ connection, proxyPools, isOAuth, isFirst
         />
       </div>
     </div>
+    {showDiagnostic && onSaveDiagnosticModels && (
+      <div className="mx-2 mb-2 mt-1 min-w-0 rounded-lg border border-border p-3">
+        <DiagnosticModelsPicker
+          providerId={connection.provider}
+          connectionId={connection.id}
+          models={diagnosticModelOptions || []}
+          value={diagnosticModels || []}
+          onSave={(next) => { onSaveDiagnosticModels(next); setShowDiagnostic(false); }}
+        />
+      </div>
+    )}
+    </>
   );
 }
 
@@ -371,4 +395,7 @@ ConnectionRow.propTypes = {
     scheduleSummary: PropTypes.string,
     onConfigure: PropTypes.func,
   }),
+  diagnosticModelOptions: PropTypes.arrayOf(PropTypes.oneOfType([PropTypes.string, PropTypes.shape({ id: PropTypes.string, name: PropTypes.string })])),
+  diagnosticModels: PropTypes.arrayOf(PropTypes.string),
+  onSaveDiagnosticModels: PropTypes.func,
 };

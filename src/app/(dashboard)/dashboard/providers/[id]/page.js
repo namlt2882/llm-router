@@ -18,6 +18,7 @@ import ModelRow from "./ModelRow";
 import PassthroughModelsSection from "./PassthroughModelsSection";
 import CompatibleModelsSection from "./CompatibleModelsSection";
 import ConnectionRow from "./ConnectionRow";
+import DiagnosticModelsPicker from "./DiagnosticModelsPicker";
 import AddApiKeyModal from "./AddApiKeyModal";
 import EditCompatibleNodeModal from "./EditCompatibleNodeModal";
 import AddCustomModelModal from "./AddCustomModelModal";
@@ -81,6 +82,7 @@ export default function ProviderDetailPage() {
   const [providerStickyLimit, setProviderStickyLimit] = useState("");
   const [thinkingMode, setThinkingMode] = useState("auto");
   const [autoPing, setAutoPing] = useState({ enabled: false, connections: {}, schedules: {} });
+  const [diagnosticModels, setDiagnosticModels] = useState({});
   const [scheduleConnection, setScheduleConnection] = useState(null);
   const [suggestedModels, setSuggestedModels] = useState([]);
   const [liveModels, setLiveModels] = useState([]);
@@ -343,6 +345,8 @@ export default function ProviderDetailPage() {
       const autoPingSettingsKey = AUTO_PING_SETTINGS_KEYS[providerId];
       const apCfg = autoPingSettingsKey ? settingsData[autoPingSettingsKey] || {} : {};
       setAutoPing({ enabled: apCfg.enabled === true, connections: apCfg.connections || {}, schedules: apCfg.schedules || {} });
+      // Patch #20 capacity scan: per provider/connection diagnostic models
+      setDiagnosticModels(settingsData.diagnosticModels || {});
       if (nodesRes.ok) {
         let node = (nodesData.nodes || []).find((entry) => entry.id === providerId) || null;
 
@@ -477,6 +481,35 @@ export default function ProviderDetailPage() {
       connections: { ...autoPing.connections, [connectionId]: reactive },
       schedules: { ...autoPing.schedules, [connectionId]: schedule },
     });
+  };
+
+  // Patch #20: diagnostic models for the daily capacity scan. Whole-map
+  // read-modify-write so other providers' entries are never clobbered. The
+  // first model configured anywhere also flips capacityScan.enabled on —
+  // a scan with no diagnostic model is a no-op anyway.
+  const saveDiagnosticModels = async (key, next) => {
+    try {
+      const settingsRes = await fetch("/api/settings", { cache: "no-store" });
+      const settingsData = settingsRes.ok ? await settingsRes.json() : {};
+      const current = settingsData.diagnosticModels || {};
+      const updated = { ...current };
+      const hadAny = Object.values(updated).some((v) => Array.isArray(v) && v.length > 0);
+      if (Array.isArray(next) && next.length > 0) updated[key] = next;
+      else delete updated[key];
+      const hasAny = Object.values(updated).some((v) => Array.isArray(v) && v.length > 0);
+      const patch = { diagnosticModels: updated };
+      if (!hadAny && hasAny) {
+        patch.capacityScan = { ...(settingsData.capacityScan || {}), enabled: true };
+      }
+      setDiagnosticModels(updated);
+      await fetch("/api/settings", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(patch),
+      });
+    } catch (error) {
+      console.log("Error saving diagnostic models:", error);
+    }
   };
 
   useEffect(() => {
@@ -1085,6 +1118,9 @@ export default function ProviderDetailPage() {
                   scheduleSummary: getScheduleSlotLabels(autoPing.schedules?.[conn.id]).join(" / "),
                   onConfigure: () => setScheduleConnection(conn),
                 } : null}
+                diagnosticModelOptions={isCompatible ? models : null}
+                diagnosticModels={isCompatible ? (diagnosticModels[conn.id] || []) : null}
+                onSaveDiagnosticModels={isCompatible ? (next) => saveDiagnosticModels(conn.id, next) : null}
                 onUpdateProxy={async (proxyPoolId) => {
                   try {
                     const res = await fetch(`/api/providers/${conn.id}`, {
@@ -1797,6 +1833,18 @@ export default function ProviderDetailPage() {
 
       {/* Per-provider user overrides (custom headers / connect timeout) */}
       <CustomConfigCard providerId={providerId} />
+
+      {/* Patch #20: capacity auto-detect — diagnostic models for the daily scan */}
+      {!isCompatible && (
+        <Card>
+          <DiagnosticModelsPicker
+            providerId={providerId}
+            models={models}
+            value={diagnosticModels[providerId] || []}
+            onSave={(next) => saveDiagnosticModels(providerId, next)}
+          />
+        </Card>
+      )}
 
       {/* Models */}
       <Card>
