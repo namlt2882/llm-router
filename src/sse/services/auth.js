@@ -18,6 +18,8 @@ import {
   getUpstreamWaitMs,
 } from "./accountInflight.js";
 import * as log from "../utils/logger.js";
+// Fork patch #19: combo-scoped fanout — per-account budgets + headroom ranking.
+import { parseFanoutCtx, effectiveFanoutBudget, rankFanout } from "./fanoutBudget.js";
 
 // Mutex to prevent race conditions during account selection
 let selectionMutex = Promise.resolve();
@@ -72,6 +74,10 @@ async function selectProviderCredentials(provider, excludeConnectionIds = null, 
   const requestedModel = options?.requestedModel || model;
   // Fork patch #4: the conversation identity, when the caller resolved one.
   const sessionId = options?.sessionId || null;
+  // Fork patch #19: when the request rides a fanout combo, each account runs at
+  // its OWN budget (settings.budgets entry, else the global limit) and selection
+  // ranks by free headroom instead of the provider strategy. Parsed exactly here.
+  const fanoutCtx = parseFanoutCtx(options?.fanout);
   // Acquire mutex to prevent race conditions
   const currentMutex = selectionMutex;
   let resolveMutex;
@@ -126,13 +132,14 @@ async function selectProviderCredentials(provider, excludeConnectionIds = null, 
     // Fork patch #5: an account at its in-flight cap is temporarily unusable —
     // distinct from locked (which has a known reset) and from empty.
     const inflightLimit = accountInflightLimit();
+    const limitFor = (c) => effectiveFanoutBudget(fanoutCtx, c.id, inflightLimit);
     let busyCount = 0;
 
     // Filter out model-locked, excluded, and Antigravity quota-exhausted connections.
     const availableConnections = connections.filter(c => {
       if (excludeSet.has(c.id)) return false;
       if (isModelLockActive(c, model)) return false;
-      if (getInflightCount(c.id) >= inflightLimit) {
+      if (getInflightCount(c.id) >= limitFor(c)) {
         busyCount += 1;
         return false;
       }
@@ -233,6 +240,22 @@ async function selectProviderCredentials(provider, excludeConnectionIds = null, 
     }
     if (connection) {
       // skip strategy
+    } else if (fanoutCtx) {
+      // Fork patch #19: fanout ranks by how much of each account's OWN budget is
+      // free, so a big-budget account with more absolute load still wins over a
+      // small-budget account that is nearly full. Overrides the provider strategy
+      // for this leg; recency is an input, so it persists like spread does.
+      const ranked = rankFanout(availableConnections.map((c) => ({
+        id: c.id,
+        budget: limitFor(c),
+        inflight: getInflightCount(c.id),
+        backoffLevel: c.backoffLevel || 0,
+        lastUsedAt: c.lastUsedAt || "",
+        priority: c.priority ?? 999,
+      })));
+      connection = availableConnections.find((c) => c.id === ranked[0].id);
+      log.info("AUTH", `${provider} | fanout → ${connection.id?.slice(0, 8)} (inflight ${getInflightCount(connection.id)}/${limitFor(connection)})`);
+      await updateProviderConnection(connection.id, { lastUsedAt: new Date().toISOString() });
     } else if (strategy === "round-robin") {
       const stickyLimit = providerOverride.stickyRoundRobinLimit || settings.stickyRoundRobinLimit || 3;
 
@@ -298,7 +321,7 @@ async function selectProviderCredentials(provider, excludeConnectionIds = null, 
     // Fork patch #5: take the slot while still inside the selection mutex, so
     // no concurrent selector can pick the same account past its cap. The
     // release sites are the same ones that decrement the pending tracker.
-    if (!tryAcquireAccountSlot(connection.id, inflightLimit)) {
+    if (!tryAcquireAccountSlot(connection.id, limitFor(connection))) {
       // The account filled between choosing it and taking its slot. Serving it
       // anyway would make the cap advisory; answer the same retryable busy
       // state as the all-accounts-full path, which callers already handle.
