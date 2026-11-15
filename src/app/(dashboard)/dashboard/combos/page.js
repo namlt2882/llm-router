@@ -727,12 +727,17 @@ function FanoutSection({ combo, comboByName = {}, activeProviders = [], strategy
   return (
     <div className="w-full border-t border-border/60 px-4 py-2">
       <div className="flex items-center justify-between gap-2">
-        <span className="text-[11px] font-medium text-text-main">Fanout concurrency</span>
+        <span className="text-[11px] font-medium text-text-main">
+          Fanout concurrency
+          {rows.length > 0 && <span className="ml-1 font-normal text-text-muted">· {rows.length} accounts</span>}
+        </span>
         <span className="text-[10px] text-text-muted" title="Each account runs at its own in-flight budget; the combo's pool is the sum of budgets. Empty = global limit.">
           pool = Σ budgets
         </span>
       </div>
-      <div className="mt-1.5 grid gap-1">
+      {/* A provider can carry hundreds of connections; cap the editor's height
+          and scroll inside it instead of stretching the combo card. */}
+      <div className="mt-1.5 grid max-h-48 gap-1 overflow-y-auto pr-1">
         {rows.map((c) => (
           <div key={c.id} className="flex items-center justify-between gap-2 text-[11px]">
             <span className="truncate text-text-muted" title={`${c.provider} — ${c.id}`}>{c.name || c.id.slice(0, 8)}</span>
