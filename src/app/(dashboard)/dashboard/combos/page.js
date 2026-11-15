@@ -10,7 +10,7 @@ import { useCopyToClipboard } from "@/shared/hooks/useCopyToClipboard";
 import { useModelCaps } from "@/shared/hooks/useModelCaps";
 import { aggregateComboCapabilities } from "open-sse/providers/capabilities.js";
 import { resolveProviderId, AI_PROVIDERS } from "@/shared/constants/providers";
-import { mergeStrategyPatch, memberProviders } from "./strategy-config.js";
+import { mergeStrategyPatch, fanoutBudgetRows } from "./strategy-config.js";
 
 // Validate combo name: only a-z, A-Z, 0-9, -, _
 const VALID_NAME_REGEX = /^[a-zA-Z0-9_.\-]+$/;
@@ -666,7 +666,7 @@ function FanoutSection({ combo, comboByName = {}, activeProviders = [], strategy
   const onSetRef = useRef(onSetStrategy);
   const budgets = localBudgets ?? fanout?.budgets ?? {};
   const rows = enabled
-    ? (activeProviders || []).filter((c) => memberProviders(combo.models, comboByName).has(c.provider))
+    ? fanoutBudgetRows(activeProviders, combo.models, comboByName)
     : [];
 
   const persist = (next) => {

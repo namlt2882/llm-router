@@ -52,3 +52,19 @@ export function memberProviders(members, comboByName, depth = 0) {
   }
   return out;
 }
+
+/**
+ * Connections that get a budget row in the fanout editor. A member is written
+ * with the provider's PREFIX ("fnt/model-id" for a custom endpoint,
+ * "openai/gpt-4" for a registry provider), while a connection identifies as
+ * either that prefix (`provider` for registry providers) or a dynamic id with
+ * the prefix in `providerSpecificData.prefix` (custom endpoints) — accept both.
+ * @param {Array<{provider?: string, providerSpecificData?: {prefix?: string}}>|null} activeProviders
+ * @param {string[]} members
+ * @param {Record<string, string[]|{models?: string[]}>} comboByName
+ * @returns {Array}
+ */
+export function fanoutBudgetRows(activeProviders, members, comboByName) {
+  const wanted = memberProviders(members, comboByName);
+  return (activeProviders || []).filter((c) => wanted.has(c?.provider) || wanted.has(c?.providerSpecificData?.prefix));
+}
