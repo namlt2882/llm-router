@@ -132,7 +132,11 @@ async function selectProviderCredentials(provider, excludeConnectionIds = null, 
     // Fork patch #5: an account at its in-flight cap is temporarily unusable —
     // distinct from locked (which has a known reset) and from empty.
     const inflightLimit = accountInflightLimit();
-    const limitFor = (c) => effectiveFanoutBudget(fanoutCtx, c.id, inflightLimit);
+    // Patch #20 capacity scan: the detected (connection, model) budget is the
+    // base cap for EVERY strategy (ruling 2026-11-15); a model the scan never
+    // measured keeps the global limit (ruling 2026-11-16).
+    const detectedBudgets = (await getSettings())?.detectedBudgets || null;
+    const limitFor = (c) => effectiveFanoutBudget(fanoutCtx, c.id, inflightLimit, detectedBudgets, model);
     let busyCount = 0;
 
     // Filter out model-locked, excluded, and Antigravity quota-exhausted connections.
