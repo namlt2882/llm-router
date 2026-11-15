@@ -10,5 +10,15 @@ export async function register() {
 
     const { startModelCatalogSync } = await import("@/lib/modelCatalog/sync.js");
     startModelCatalogSync();
+
+    // Patch #20: daily capacity auto-detect scheduler. A scan failure must
+    // never block boot — the stale-running rule recovers a crashed scan on a
+    // later tick, so the only job here is to start the interval.
+    try {
+      const { ensureCapacityScheduler } = await import("@/lib/fork/capacity/scan.js");
+      ensureCapacityScheduler();
+    } catch (e) {
+      console.warn("[CAPACITY] scheduler failed to start:", e?.message || e);
+    }
   }
 }

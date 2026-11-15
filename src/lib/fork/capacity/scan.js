@@ -171,7 +171,15 @@ const HOUR_MS = 3600 * 1000;
 
 let schedulerHandle = null;
 
-async function schedulerTick(deps) {
+// Boot calls ensureCapacityScheduler() with no arguments; tests inject fakes.
+const schedulerDeps = (deps = {}) => ({
+  getSettings, updateSettings, getProviderConnections, getInflightCount, checkAndRefreshToken,
+  now: () => Date.now(),
+  ...deps,
+});
+
+async function schedulerTick(rawDeps) {
+  const deps = schedulerDeps(rawDeps);
   const settings = await deps.getSettings();
   const state = settings?.capacityScan && typeof settings.capacityScan === "object" ? settings.capacityScan : {};
   // Never scanned before: stagger the first run randomly within 6 hours so a
@@ -188,8 +196,9 @@ async function schedulerTick(deps) {
 
 /**
  * Start the capacity scheduler (one 15-minute interval per process,
- * unref()d). Idempotent: later calls return the existing handle.
- * @param {Parameters<runCapacityScan>[0]} deps
+ * unref()d). Idempotent: later calls return the existing handle. Call with no
+ * arguments at boot to use the real settings/DB wiring.
+ * @param {Parameters<runCapacityScan>[0]} [deps]
  * @returns {{ stop: () => void }}
  */
 export function ensureCapacityScheduler(deps) {
