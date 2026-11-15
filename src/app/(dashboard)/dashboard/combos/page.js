@@ -10,6 +10,7 @@ import { useCopyToClipboard } from "@/shared/hooks/useCopyToClipboard";
 import { useModelCaps } from "@/shared/hooks/useModelCaps";
 import { aggregateComboCapabilities } from "open-sse/providers/capabilities.js";
 import { resolveProviderId, AI_PROVIDERS } from "@/shared/constants/providers";
+import { mergeStrategyPatch, memberProviders } from "./strategy-config.js";
 
 // Validate combo name: only a-z, A-Z, 0-9, -, _
 const VALID_NAME_REGEX = /^[a-zA-Z0-9_.\-]+$/;
@@ -336,18 +337,15 @@ export default function CombosPage() {
     });
   };
 
-  // Merge a per-combo strategy patch into settings.comboStrategies. Passing an empty
-  // patch (strategy back to default "fallback") drops the entry entirely.
+  // Merge a per-combo strategy patch into settings.comboStrategies. mergeStrategyPatch
+  // keeps a fanout-enabled entry alive even when the fallback strategy stays at its
+  // default, and returns null when nothing meaningful remains (entry dropped).
   const handleSetComboStrategy = async (comboName, patch) => {
     try {
       const updated = { ...comboStrategies };
-      const next = { ...(updated[comboName] || {}), ...patch };
-      // Prune to keep settings clean: default fallback with no extras = no entry.
-      if (!next.fallbackStrategy || next.fallbackStrategy === "fallback") {
-        delete updated[comboName];
-      } else {
-        updated[comboName] = next;
-      }
+      const next = mergeStrategyPatch(updated[comboName] || {}, patch);
+      if (next) updated[comboName] = next;
+      else delete updated[comboName];
 
       await persistComboStrategies(updated);
     } catch (error) {
@@ -655,6 +653,71 @@ function getRouterModelStatus(routerModel, activeProviders) {
   return { ready: false, label: "Not configured", providerId };
 }
 
+// Fanout concurrency section (patch #19): toggle + one budget input per account
+// of the combo's member providers. Empty input = the account runs at the global
+// in-flight limit; a number gives it its own budget (integer >= 1).
+function FanoutSection({ combo, comboByName = {}, activeProviders = [], strategy = {}, onSetStrategy }) {
+  const fanout = strategy.fanout;
+  const enabled = fanout?.enabled === true;
+  const budgets = fanout?.budgets || {};
+  const rows = enabled
+    ? (activeProviders || []).filter((c) => memberProviders(combo.models, comboByName).has(c.provider))
+    : [];
+  if (!enabled && rows.length === 0 && !(activeProviders || []).length) return null;
+
+  const setBudget = (id, raw) => {
+    const next = { ...budgets };
+    const value = String(raw).trim();
+    if (value === "") {
+      delete next[id];
+    } else {
+      const parsed = Number(value);
+      if (!Number.isInteger(parsed) || parsed < 1) return; // ignore invalid keystrokes
+      next[id] = parsed;
+    }
+    onSetStrategy({ fanout: { enabled: true, budgets: next } });
+  };
+
+  return (
+    <div className="w-full border-t border-border/60 px-4 py-2">
+      <div className="flex items-center justify-between gap-2">
+        <label className="flex items-center gap-2 text-[11px] font-medium text-text-main">
+          <input
+            type="checkbox"
+            checked={enabled}
+            onChange={() => onSetStrategy({ fanout: enabled ? null : { enabled: true, budgets: {} } })}
+          />
+          Fanout concurrency
+        </label>
+        <span className="text-[10px] text-text-muted" title="Each account runs at its own in-flight budget; the combo's pool is the sum of budgets. Empty = global limit.">
+          pool = Σ budgets
+        </span>
+      </div>
+      {enabled && (
+        <div className="mt-1.5 grid gap-1">
+          {rows.map((c) => (
+            <div key={c.id} className="flex items-center justify-between gap-2 text-[11px]">
+              <span className="truncate text-text-muted" title={`${c.provider} — ${c.id}`}>{c.name || c.id.slice(0, 8)}</span>
+              <input
+                type="number"
+                min="1"
+                step="1"
+                className="w-16 rounded border border-border/70 bg-transparent px-1.5 py-0.5 text-[11px] text-text-main"
+                value={budgets[c.id] ?? ""}
+                onChange={(e) => setBudget(c.id, e.target.value)}
+                placeholder="global"
+              />
+            </div>
+          ))}
+          {rows.length === 0 && (
+            <p className="text-[10px] text-text-muted">No active account matches this combo&apos;s members.</p>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function ComboCard({ combo, getCaps, comboByName = {}, activeProviders = [], copied, onCopy, onEdit, onDelete, strategy = {}, onSetStrategy, selected = false, onToggleSelect }) {
   const [showJudgeSelect, setShowJudgeSelect] = useState(false);
   const [showRouterSelect, setShowRouterSelect] = useState(false);
@@ -831,6 +894,16 @@ function ComboCard({ combo, getCaps, comboByName = {}, activeProviders = [], cop
           </div>
         </div>
       </div>
+
+      {/* Fanout concurrency (patch #19): per-account in-flight budgets. The combo's
+          pool becomes the sum of its accounts' budgets instead of one global cap. */}
+      <FanoutSection
+        combo={combo}
+        comboByName={comboByName}
+        activeProviders={activeProviders}
+        strategy={strategy}
+        onSetStrategy={onSetStrategy}
+      />
 
       {/* Judge model picker (single-select; combo members make natural judges too) */}
       {showJudgeSelect && (
