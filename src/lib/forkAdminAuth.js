@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import { verifyDashboardAuthToken } from "@/lib/auth/dashboardSession";
+import { getDashboardAuthSession } from "@/lib/auth/dashboardSession";
 
 function safeEqual(a, b) {
   const ha = crypto.createHash("sha256").update(a).digest();
@@ -21,5 +21,7 @@ export async function assertForkAdmin(request) {
   const auth = request.headers.get("authorization") || "";
   if (expected && auth.startsWith("Bearer ") && safeEqual(auth.slice(7).trim(), expected)) return true;
   const token = sessionCookie(request);
-  return token ? await verifyDashboardAuthToken(token) : false;
+  const session = token ? await getDashboardAuthSession(token) : null;
+  // Password and WaveBot-ticket sessions are admin sessions; an SSO login proves identity, not admin rights.
+  return !!session && !session.oidc && !session.saml;
 }
