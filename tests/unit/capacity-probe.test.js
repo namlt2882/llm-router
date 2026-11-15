@@ -72,6 +72,29 @@ describe("probeConnectionModel", () => {
     expect((await probeConnectionModel({ ...TASK, dispatch })).status).toBe("auth");
   });
 
+  // Found live 2026-11-16: the scan's default probeFn calls this WITHOUT a
+  // dispatch, and with none the dispatch call threw TypeError — every level
+  // rejected, the pair read `unreachable` with probeRequests 0. The default
+  // must resolve the registry transport + global fetch itself.
+  it("without an explicit dispatch it probes via the registry + global fetch (the scan's default path)", async () => {
+    const calls = [];
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = async (url, init) => {
+      calls.push({ url, auth: init?.headers?.Authorization });
+      return new Response(JSON.stringify({ choices: [{ message: { content: "hi" } }] }), { status: 200 });
+    };
+    try {
+      const connection = { id: "c-live", apiKey: "sk-probe" };
+      const result = await probeConnectionModel({ provider: "glm", connection, model: "glm-5.3-flash" });
+      expect(result).toEqual({ status: "ok", budget: 32, requests: 63 });
+      expect(calls.length).toBe(63);
+      expect(calls[0].url).toBe("https://api.z.ai/api/coding/paas/v4/chat/completions");
+      expect(calls[0].auth).toMatch(/^Bearer /);
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  });
+
   it("level-1 z.ai 1113 reports balance, 1211 reports config", async () => {
     const balance = fakeUpstream({ limit: 0, fail: () => ({ ok: false, status: 429, bodyText: '{"code":"1113"}' }) });
     expect((await probeConnectionModel({ ...TASK, dispatch: balance })).status).toBe("balance");
