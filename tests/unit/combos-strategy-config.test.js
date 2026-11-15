@@ -47,4 +47,12 @@ describe("mergeStrategyPatch", () => {
     expect(mergeStrategyPatch(cur, { fanout: { enabled: true, budgets: { a: 5 } } }))
       .toEqual({ fanout: { enabled: true, budgets: { a: 5 } } });
   });
+
+  // Patch #20: the margin-% input writes only fanout.percent — the stored
+  // budgets must survive the merge (spread of the fanout key, not replace).
+  it("percent rides the fanout key without clobbering stored budgets", () => {
+    const cur = { fallbackStrategy: "fanout", fanout: { enabled: true, budgets: { a: 6 } } };
+    expect(mergeStrategyPatch(cur, { fanout: { percent: 80 } }))
+      .toEqual({ fallbackStrategy: "fanout", fanout: { enabled: true, budgets: { a: 6 }, percent: 80 } });
+  });
 });

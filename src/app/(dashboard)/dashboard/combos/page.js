@@ -663,6 +663,56 @@ function ComboCard({ combo, getCaps, comboByName = {}, activeProviders = [], cop
   const routerModel = strategy.routerModel || "";
   const isFusion = current === "fusion";
   const isSmart = current === "smart";
+  const isFanout = current === "fanout" || strategy.fanout?.enabled === true;
+  // Patch #20: margin % on detected budgets + scan-now + capacity summary
+  const storedPercent = strategy.fanout?.percent;
+  const [percentDraft, setPercentDraft] = useState(undefined); // undefined = follow stored
+  const shownPercent = percentDraft !== undefined ? percentDraft : (storedPercent != null ? String(storedPercent) : "");
+  const [scanning, setScanning] = useState(false);
+  const [scanState, setScanState] = useState(null);
+  const [scanTrigger, setScanTrigger] = useState(0);
+
+  useEffect(() => {
+    if (!isFanout) return undefined;
+    let cancelled = false;
+    let timer = null;
+    const tick = async () => {
+      try {
+        const res = await fetch(`/api/fork/capacity-scan?combo=${encodeURIComponent(combo.name)}`, { cache: "no-store" });
+        if (res.ok) {
+          const data = await res.json();
+          if (cancelled) return;
+          setScanState(data);
+          if (!data.running) setScanning(false);
+          else timer = setTimeout(tick, 5000);
+        } else if (!cancelled) {
+          setScanning(false);
+        }
+      } catch {
+        if (!cancelled) setScanning(false);
+      }
+    };
+    tick();
+    return () => { cancelled = true; if (timer) clearTimeout(timer); };
+  }, [isFanout, combo.name, scanTrigger]);
+
+  const commitPercent = () => {
+    if (percentDraft === undefined) return;
+    const n = Number.parseInt(percentDraft, 10);
+    if (Number.isInteger(n) && n >= 1 && n <= 100) {
+      onSetStrategy({ fanout: { percent: n } });
+    } else {
+      setPercentDraft(undefined); // revert an invalid draft to the stored value
+    }
+  };
+
+  const scanNow = async () => {
+    setScanning(true);
+    try {
+      await fetch("/api/fork/capacity-scan", { method: "POST" });
+    } catch { /* the poll surfaces the state either way */ }
+    setScanTrigger((t) => t + 1);
+  };
   // The synced catalog is server-only, so resolving here would fall back to the
   // generic patterns and under-report the limits. getCaps carries the server's
   // answer for /api/models.
@@ -782,6 +832,41 @@ function ComboCard({ combo, getCaps, comboByName = {}, activeProviders = [], cop
                       <span className="material-symbols-outlined text-[13px]">close</span>
                     </button>
                   )}
+                </div>
+              );
+            })()}
+            {/* Fanout: margin %, scan-now, capacity summary (patch #20) */}
+            {isFanout && (() => {
+              const summary = scanState?.summary || null;
+              const lastRunAt = scanState?.lastRunAt || null;
+              const summaryText = summary
+                ? `Dung lượng ~${summary.sum}${summary.nested ? ` (${summary.nested} nested)` : ""} · quét ${lastRunAt ? new Date(lastRunAt).toLocaleTimeString("vi-VN", { hour: "2-digit", minute: "2-digit", hour12: false }) : "—"}`
+                : (scanState && !scanState.running ? "chưa có dữ liệu quét" : (scanning ? "đang quét…" : ""));
+              return (
+                <div className="mt-2 flex min-w-0 flex-wrap items-center gap-1.5">
+                  <span className="text-[11px] font-medium text-text-muted">Margin %</span>
+                  <input
+                    type="number"
+                    min={1}
+                    max={100}
+                    placeholder="100"
+                    value={shownPercent}
+                    onChange={(e) => setPercentDraft(e.target.value)}
+                    onBlur={commitPercent}
+                    onKeyDown={(e) => { if (e.key === "Enter") e.target.blur(); }}
+                    title="% của hạn mức phát hiện được (80% của 5 = 4). Budget thủ công trong strategy vẫn nguyên bản, không nhân %."
+                    className="w-16 rounded border border-border bg-background px-1.5 py-0.5 text-[11px] focus:border-primary focus:outline-none"
+                  />
+                  <button
+                    onClick={scanNow}
+                    disabled={scanning}
+                    className={`inline-flex items-center gap-1 rounded border border-border/70 bg-black/[0.02] dark:bg-white/[0.02] px-2 py-0.5 text-[11px] transition-colors ${scanning ? "text-text-muted" : "text-text-main hover:border-primary/50 hover:bg-primary/5"}`}
+                    title="Chạy quét hạn mức concurrency cho cả hệ thống bằng model chuẩn đoán"
+                  >
+                    <span className="material-symbols-outlined text-[13px] text-text-muted">{scanning ? "progress_activity" : "speed"}</span>
+                    <span className="font-medium">{scanning ? "Đang quét…" : "Quét ngay"}</span>
+                  </button>
+                  {summaryText && <span className="text-[10px] text-text-muted">{summaryText}</span>}
                 </div>
               );
             })()}

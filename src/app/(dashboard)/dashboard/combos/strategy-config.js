@@ -25,6 +25,12 @@
  */
 export function mergeStrategyPatch(currentEntry, patch) {
   const next = { ...(currentEntry || {}), ...patch };
+  // Patch #20: a patch that touches only fanout.percent must not clobber the
+  // stored budgets — spread the fanout object instead of replacing it.
+  if (patch.fanout && typeof patch.fanout === "object"
+    && currentEntry?.fanout && typeof currentEntry.fanout === "object") {
+    next.fanout = { ...currentEntry.fanout, ...patch.fanout };
+  }
   if (patch.fanout === null) delete next.fanout;
   // Patch-aware on purpose: isFanoutEntry(next) alone would keep a legacy
   // entry's fanout key even when THIS patch just moved it to another strategy.
