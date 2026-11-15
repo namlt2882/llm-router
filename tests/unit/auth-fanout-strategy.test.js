@@ -21,14 +21,15 @@ vi.mock("open-sse/services/accountFallback.js", () => ({
 vi.mock("../../src/sse/services/accountInflight.js", () => ({
   accountInflightLimit: () => 4,
   getInflightCount: (id) => h.inflight[id] || 0,
-  tryAcquireAccountSlot: (id, limit) => { h.acquired.push([id, limit]); return true; },
+  tryAcquireAccountSlot: (id, limit) => { h.acquired.push([id, limit]); return h.acquireOk !== false; },
   releaseAccountSlot: () => {},
   createWaitTicket: () => ({}),
-  waitForCapacity: async () => false,
+  waitForCapacity: async () => (h.onWait ? (h.onWait(), true) : false),
   recordAccountBusy: () => {},
   __resetAccountInflight: () => {},
 }));
-vi.mock("../../src/sse/utils/logger.js", () => ({ info: vi.fn(), warn: vi.fn(), debug: vi.fn(), error: vi.fn() }));
+const logger = vi.hoisted(() => ({ warn: vi.fn() }));
+vi.mock("../../src/sse/utils/logger.js", () => ({ info: vi.fn(), warn: logger.warn, debug: vi.fn(), error: vi.fn() }));
 vi.mock("../../src/sse/services/antigravityQuota.js", () => ({}));
 vi.mock("../../src/sse/services/sessionPin.js", () => ({
   getPinnedConnectionId: (provider, session) => h.pins[session] || null,
@@ -44,6 +45,9 @@ beforeEach(() => {
   h.acquired.length = 0;
   h.pins = {};
   h.inflight = {};
+  h.acquireOk = true;
+  h.onWait = null;
+  logger.warn.mockClear();
   h.settings = { fallbackStrategy: "spread" };
   h.connections = [conn("a", { priority: 0, lastUsedAt: "2026-01-01T00:00:00Z" }), conn("b", { priority: 9, lastUsedAt: "2026-01-02T00:00:00Z" })];
 });
@@ -108,5 +112,37 @@ describe("fanout selection", () => {
     const pick = await getProviderCredentials("openai", null, "m");
     expect(pick.connectionId).toBe("b");
     expect(h.acquired[h.acquired.length - 1]).toEqual(["b", 4]); // global limit at the slot
+  });
+
+  it("logs the per-account budget sum, not the global limit, on the all-busy path", async () => {
+    h.inflight = { a: 8, b: 2 }; // Σ budgets 8+2 = 10
+    await getProviderCredentials("openai", null, "m", { fanout: FANOUT });
+    const warn = logger.warn.mock.calls.map((c) => c.join(" ")).find((s) => s.includes("in-flight"));
+    expect(warn).toContain("Σ 10");
+    expect(warn).not.toContain("max in-flight (4)");
+  });
+
+  it("keeps the global-limit wording on the all-busy path without a fanout ctx", async () => {
+    h.inflight = { a: 4, b: 4 };
+    await getProviderCredentials("openai", null, "m");
+    const warn = logger.warn.mock.calls.map((c) => c.join(" ")).find((s) => s.includes("in-flight"));
+    expect(warn).toContain("max in-flight (4)");
+    expect(warn).not.toContain("Σ");
+  });
+
+  it("slot race logs the chosen account's own budget under fanout", async () => {
+    h.acquireOk = false;
+    h.inflight = { a: 0, b: 0 }; // ratio tie → recency picks a (budget 8)
+    await getProviderCredentials("openai", null, "m", { fanout: FANOUT });
+    const raceWarn = logger.warn.mock.calls.map((c) => c.join(" ")).find((s) => s.includes("slot race"));
+    expect(raceWarn).toContain("budget (8)");
+  });
+
+  it("wait loop retries after a simulated release and serves under fanout", async () => {
+    h.inflight = { a: 8, b: 2 }; // first attempt: every account at its own budget
+    h.onWait = () => { h.inflight = { a: 7, b: 2 }; }; // a releases one slot
+    const pick = await getProviderCredentials("openai", null, "m", { fanout: FANOUT, upstreamWaitMs: 5000 });
+    expect(pick.connectionId).toBe("a"); // ratio a: 1/8 free vs b: 0
+    expect(pick.lastErrorCode).toBeUndefined();
   });
 });

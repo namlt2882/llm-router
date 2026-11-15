@@ -196,7 +196,9 @@ async function selectProviderCredentials(provider, excludeConnectionIds = null, 
       // never "no credentials" (404) — the accounts exist and will free up.
       if (busyCount > 0 && lockedConns.length === 0) {
         const retryAfter = new Date(Date.now() + 2000).toISOString();
-        log.warn("AUTH", `${provider} | all ${connections.length} accounts at max in-flight (${inflightLimit})`);
+        log.warn("AUTH", fanoutCtx
+          ? `${provider} | all ${connections.length} accounts at their in-flight budgets (Σ ${connections.reduce((s, c) => s + limitFor(c), 0)})`
+          : `${provider} | all ${connections.length} accounts at max in-flight (${inflightLimit})`);
         return {
           allRateLimited: true,
           retryAfter,
@@ -325,7 +327,7 @@ async function selectProviderCredentials(provider, excludeConnectionIds = null, 
       // The account filled between choosing it and taking its slot. Serving it
       // anyway would make the cap advisory; answer the same retryable busy
       // state as the all-accounts-full path, which callers already handle.
-      log.warn("AUTH", `${provider} | slot race on ${connection.id?.slice(0, 8)} — account now at max in-flight (${inflightLimit})`);
+      log.warn("AUTH", `${provider} | slot race on ${connection.id?.slice(0, 8)} — account now at ${fanoutCtx ? `its in-flight budget (${limitFor(connection)})` : `max in-flight (${inflightLimit})`}`);
       return {
         allRateLimited: true,
         retryAfter: new Date(Date.now() + 2000).toISOString(),

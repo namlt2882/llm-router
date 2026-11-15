@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { DndContext, closestCenter, KeyboardSensor, PointerSensor, useSensor, useSensors } from "@dnd-kit/core";
 import { arrayMove, SortableContext, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
@@ -652,28 +652,64 @@ function getRouterModelStatus(routerModel, activeProviders) {
 
 // Fanout concurrency section (patch #19): toggle + one budget input per account
 // of the combo's member providers. Empty input = the account runs at the global
-// in-flight limit; a number gives it its own budget (integer >= 1).
+// in-flight limit; a number gives it its own budget (integer >= 1). Edits are
+// held locally and persisted debounced, so rapid keystrokes collapse into one
+// PATCH instead of racing full-map writes against each other.
+const FANOUT_PERSIST_DEBOUNCE_MS = 400;
 function FanoutSection({ combo, comboByName = {}, activeProviders = [], strategy = {}, onSetStrategy }) {
   const fanout = strategy.fanout;
   const enabled = fanout?.enabled === true;
-  const budgets = fanout?.budgets || {};
+  const [localBudgets, setLocalBudgets] = useState(null);
+  const localRef = useRef(null);
+  const timerRef = useRef(null);
+  const pendingRef = useRef(null);
+  const onSetRef = useRef(onSetStrategy);
+  const budgets = localBudgets ?? fanout?.budgets ?? {};
   const rows = enabled
     ? (activeProviders || []).filter((c) => memberProviders(combo.models, comboByName).has(c.provider))
     : [];
-  if (!enabled && rows.length === 0 && !(activeProviders || []).length) return null;
 
+  const persist = (next) => {
+    pendingRef.current = null;
+    if (timerRef.current) { clearTimeout(timerRef.current); timerRef.current = null; }
+    onSetRef.current({ fanout: { enabled: true, budgets: next } });
+  };
+  const schedule = (next) => {
+    pendingRef.current = next;
+    if (timerRef.current) clearTimeout(timerRef.current);
+    timerRef.current = setTimeout(() => persist(pendingRef.current), FANOUT_PERSIST_DEBOUNCE_MS);
+  };
   const setBudget = (id, raw) => {
-    const next = { ...budgets };
     const value = String(raw).trim();
+    const next = { ...(localRef.current ?? fanout?.budgets ?? {}) };
     if (value === "") {
       delete next[id];
     } else {
       const parsed = Number(value);
-      if (!Number.isInteger(parsed) || parsed < 1) return; // ignore invalid keystrokes
+      if (!Number.isInteger(parsed) || parsed < 1) return; // snap back; the input's title explains the rule
       next[id] = parsed;
     }
-    onSetStrategy({ fanout: { enabled: true, budgets: next } });
+    localRef.current = next;
+    setLocalBudgets(next);
+    schedule(next);
   };
+  const toggle = () => {
+    // A pending persist must not resurrect fanout after an explicit toggle-off.
+    if (timerRef.current) { clearTimeout(timerRef.current); timerRef.current = null; }
+    pendingRef.current = null;
+    localRef.current = null;
+    setLocalBudgets(null);
+    onSetStrategy({ fanout: enabled ? null : { enabled: true, budgets: {} } });
+  };
+  useEffect(() => () => {
+    // Flush a pending edit so navigating away within the debounce window does not lose it.
+    if (timerRef.current) { clearTimeout(timerRef.current); timerRef.current = null; }
+    if (pendingRef.current) onSetRef.current({ fanout: { enabled: true, budgets: pendingRef.current } });
+    pendingRef.current = null;
+  }, []);
+  useEffect(() => { onSetRef.current = onSetStrategy; });
+
+  if (!enabled && rows.length === 0 && !(activeProviders || []).length) return null;
 
   return (
     <div className="w-full border-t border-border/60 px-4 py-2">
@@ -682,7 +718,7 @@ function FanoutSection({ combo, comboByName = {}, activeProviders = [], strategy
           <input
             type="checkbox"
             checked={enabled}
-            onChange={() => onSetStrategy({ fanout: enabled ? null : { enabled: true, budgets: {} } })}
+            onChange={toggle}
           />
           Fanout concurrency
         </label>
@@ -702,7 +738,9 @@ function FanoutSection({ combo, comboByName = {}, activeProviders = [], strategy
                 className="w-16 rounded border border-border/70 bg-transparent px-1.5 py-0.5 text-[11px] text-text-main"
                 value={budgets[c.id] ?? ""}
                 onChange={(e) => setBudget(c.id, e.target.value)}
+                onBlur={() => { if (pendingRef.current) persist(pendingRef.current); }}
                 placeholder="global"
+                title="In-flight budget for this account: integer >= 1; empty = global limit (invalid input snaps back)"
               />
             </div>
           ))}
