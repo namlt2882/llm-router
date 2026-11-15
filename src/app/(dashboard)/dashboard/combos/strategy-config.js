@@ -78,3 +78,40 @@ export function fanoutBudgetRows(activeProviders, members, comboByName) {
   const wanted = memberProviders(members, comboByName);
   return (activeProviders || []).filter((c) => wanted.has(c?.provider) || wanted.has(c?.providerSpecificData?.prefix));
 }
+
+/**
+ * Rows the fanout editor renders for a pool this size or smaller: every
+ * matching connection. A pool larger than this switches to budgeted + search
+ * rows — rendering hundreds of inputs serves no one (ruling 2026-11-15).
+ * @type {number}
+ */
+export const FANOUT_EDITOR_INLINE_LIMIT = 20;
+
+/**
+ * Connections from `rows` that carry a budget in `budgets` — the rows the
+ * editor always shows, whatever the pool size.
+ * @param {Array<{id: string, name?: string}>} rows
+ * @param {Record<string, number>|undefined} budgets
+ * @returns {typeof rows}
+ */
+export function budgetedFanoutRows(rows, budgets) {
+  return (rows || []).filter((r) => budgets?.[r.id] !== undefined);
+}
+
+/**
+ * Connections from `rows` matching `query` by name that do NOT yet carry a
+ * budget — the editor's search candidates, capped at `cap`. An empty or
+ * blank query yields no rows.
+ * @param {Array<{id: string, name?: string}>} rows
+ * @param {Record<string, number>|undefined} budgets
+ * @param {string} query
+ * @param {number} cap
+ * @returns {typeof rows}
+ */
+export function fanoutSearchRows(rows, budgets, query, cap = 10) {
+  const q = String(query || "").trim().toLowerCase();
+  if (!q) return [];
+  return (rows || [])
+    .filter((r) => budgets?.[r.id] === undefined && String(r.name || "").toLowerCase().includes(q))
+    .slice(0, cap);
+}

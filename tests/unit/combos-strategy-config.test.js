@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { mergeStrategyPatch, memberProviders, fanoutBudgetRows } from "../../src/app/(dashboard)/dashboard/combos/strategy-config.js";
+import { mergeStrategyPatch, memberProviders, fanoutBudgetRows, budgetedFanoutRows, fanoutSearchRows } from "../../src/app/(dashboard)/dashboard/combos/strategy-config.js";
 
 describe("mergeStrategyPatch", () => {
   it("keeps an entry whose fanout is enabled even with default fallback strategy", () => {
@@ -98,5 +98,28 @@ describe("fanoutBudgetRows", () => {
   it("returns no rows for plain model members", () => {
     const providers = [{ id: "o1", provider: "openai", name: "oa" }];
     expect(fanoutBudgetRows(providers, ["some-bare-model"], byName)).toEqual([]);
+  });
+});
+
+describe("budgetedFanoutRows / fanoutSearchRows", () => {
+  // Ruling 2026-11-15 (Steve): a pool of hundreds of connections must not
+  // render every row — the editor shows accounts that carry a budget, plus
+  // search results for finding one to budget.
+  const mk = (id, name) => ({ id, name });
+  const rows = [mk("a1", "fnt-a"), mk("b1", "fnt-b"), mk("x1", "fnt-x01"), mk("y1", "other-account")];
+
+  it("lists only rows that carry a budget", () => {
+    expect(budgetedFanoutRows(rows, { a1: 3, y1: 1 }).map((r) => r.id)).toEqual(["a1", "y1"]);
+    expect(budgetedFanoutRows(rows, {})).toEqual([]);
+    expect(budgetedFanoutRows(rows, null)).toEqual([]);
+  });
+
+  it("search returns unbudgeted name matches, capped", () => {
+    expect(fanoutSearchRows(rows, {}, "fnt", 10).map((r) => r.id)).toEqual(["a1", "b1", "x1"]);
+    expect(fanoutSearchRows(rows, { a1: 2 }, "fnt").map((r) => r.id)).toEqual(["b1", "x1"]);
+    const many = Array.from({ length: 15 }, (_, i) => mk("x" + i, "fnt-x" + i));
+    expect(fanoutSearchRows(many, {}, "fnt", 10)).toHaveLength(10);
+    expect(fanoutSearchRows(rows, {}, "zzz")).toEqual([]);
+    expect(fanoutSearchRows(rows, {}, "  ")).toEqual([]);
   });
 });

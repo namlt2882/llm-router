@@ -10,7 +10,7 @@ import { useCopyToClipboard } from "@/shared/hooks/useCopyToClipboard";
 import { useModelCaps } from "@/shared/hooks/useModelCaps";
 import { aggregateComboCapabilities } from "open-sse/providers/capabilities.js";
 import { resolveProviderId, AI_PROVIDERS } from "@/shared/constants/providers";
-import { mergeStrategyPatch, fanoutBudgetRows } from "./strategy-config.js";
+import { mergeStrategyPatch, fanoutBudgetRows, budgetedFanoutRows, fanoutSearchRows, FANOUT_EDITOR_INLINE_LIMIT } from "./strategy-config.js";
 import { isFanoutEntry } from "../../../../sse/services/fanoutBudget.js";
 
 // Validate combo name: only a-z, A-Z, 0-9, -, _
@@ -655,14 +655,17 @@ function getRouterModelStatus(routerModel, activeProviders) {
   return { ready: false, label: "Not configured", providerId };
 }
 
-// Fanout concurrency section (patch #19): one budget input per account of the
-// combo's member providers, shown when the combo's strategy routes as fanout
+// Fanout concurrency section (patch #19): budget inputs for the combo's
+// member-provider accounts, shown when the combo's strategy routes as fanout
 // (ruling 2026-11-15 — fanout is a strategy value in the dropdown, not a
 // checkbox; legacy entries with fanout.enabled === true still qualify via
-// isFanoutEntry). Empty input = the account runs at the global in-flight
-// limit; a number gives it its own budget (integer >= 1). Edits are held
-// locally and persisted debounced, so rapid keystrokes collapse into one
-// PATCH instead of racing full-map writes against each other.
+// isFanoutEntry). A pool at or under FANOUT_EDITOR_INLINE_LIMIT renders every
+// account; a bigger pool renders only budgeted accounts plus search results,
+// so a provider with hundreds of connections never floods the card. Empty
+// input = the account runs at the global in-flight limit; a number gives it
+// its own budget (integer >= 1). Edits are held locally and persisted
+// debounced, so rapid keystrokes collapse into one PATCH instead of racing
+// full-map writes against each other.
 const FANOUT_PERSIST_DEBOUNCE_MS = 400;
 function FanoutSection({ combo, comboByName = {}, activeProviders = [], strategy = {}, onSetStrategy }) {
   const isFanout = isFanoutEntry(strategy);
@@ -676,6 +679,14 @@ function FanoutSection({ combo, comboByName = {}, activeProviders = [], strategy
   const rows = isFanout
     ? fanoutBudgetRows(activeProviders, combo.models, comboByName)
     : [];
+  // Ruling 2026-11-15 (Steve): never render the whole pool. Small pools show
+  // every account; a big one shows only budgeted accounts plus search results
+  // for finding the next one to budget.
+  const [query, setQuery] = useState("");
+  const many = rows.length > FANOUT_EDITOR_INLINE_LIMIT;
+  const visible = many
+    ? [...budgetedFanoutRows(rows, budgets), ...fanoutSearchRows(rows, budgets, query)]
+    : rows;
 
   const persist = (next) => {
     pendingRef.current = null;
@@ -735,10 +746,19 @@ function FanoutSection({ combo, comboByName = {}, activeProviders = [], strategy
           pool = Σ budgets
         </span>
       </div>
+      {many && (
+        <input
+          type="text"
+          className="mt-1.5 w-full rounded border border-border/70 bg-transparent px-2 py-1 text-[11px] text-text-main placeholder:text-text-muted"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder={`Search an account to set its budget (${rows.length} accounts)`}
+        />
+      )}
       {/* A provider can carry hundreds of connections; cap the editor's height
           and scroll inside it instead of stretching the combo card. */}
       <div className="mt-1.5 grid max-h-48 gap-1 overflow-y-auto pr-1">
-        {rows.map((c) => (
+        {visible.map((c) => (
           <div key={c.id} className="flex items-center justify-between gap-2 text-[11px]">
             <span className="truncate text-text-muted" title={`${c.provider} — ${c.id}`}>{c.name || c.id.slice(0, 8)}</span>
             <input
@@ -756,6 +776,9 @@ function FanoutSection({ combo, comboByName = {}, activeProviders = [], strategy
         ))}
         {rows.length === 0 && (
           <p className="text-[10px] text-text-muted">No active account matches this combo&apos;s members.</p>
+        )}
+        {rows.length > 0 && visible.length === 0 && (
+          <p className="text-[10px] text-text-muted">Search an account by name to set its budget.</p>
         )}
       </div>
     </div>
