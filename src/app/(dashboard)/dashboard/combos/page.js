@@ -359,14 +359,11 @@ export default function CombosPage() {
     try {
       const updated = { ...comboStrategies };
       for (const combo of selectedCombos) {
-        if (!strategy || strategy === "fallback") {
-          delete updated[combo.name];
-        } else {
-          updated[combo.name] = {
-            ...(updated[combo.name] || {}),
-            fallbackStrategy: strategy,
-          };
-        }
+        // Same prune rules as the per-card path (patch #19): bulk "Fallback"
+        // must not silently wipe a combo's fanout config.
+        const next = mergeStrategyPatch(updated[combo.name] || {}, { fallbackStrategy: strategy });
+        if (next) updated[combo.name] = next;
+        else delete updated[combo.name];
       }
       await persistComboStrategies(updated);
     } catch (error) {

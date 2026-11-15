@@ -23,13 +23,20 @@ describe("mergeStrategyPatch", () => {
 });
 
 describe("memberProviders", () => {
+  // The page builds comboByName as name → models ARRAY (page.js:
+  // Object.fromEntries(combos.map((c) => [c.name, c.models]))) — pin that shape.
   it("collects provider prefixes and recurses one nested combo", () => {
-    const byName = { outer: { models: ["inner", "other/gpt"] }, inner: { models: ["openai/gpt-4"] } };
+    const byName = { outer: ["inner", "other/gpt"], inner: ["openai/gpt-4"] };
     expect(memberProviders(["outer", "plain-model"], byName)).toEqual(new Set(["other", "openai"]));
   });
 
+  it("also accepts name → {models} objects", () => {
+    const byName = { outer: { models: ["openai/gpt-4"] } };
+    expect(memberProviders(["outer"], byName)).toEqual(new Set(["openai"]));
+  });
+
   it("is cycle-safe and depth-capped", () => {
-    const byName = { a: { models: ["b"] }, b: { models: ["a"] } };
+    const byName = { a: ["b"], b: ["a"] };
     expect(memberProviders(["a"], byName)).toEqual(new Set());
   });
 });

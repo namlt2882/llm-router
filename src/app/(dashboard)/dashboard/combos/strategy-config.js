@@ -29,8 +29,10 @@ export function mergeStrategyPatch(currentEntry, patch) {
  * A member with a "/" contributes the part before the first slash; a member
  * naming another combo recurses into its models (depth-capped, cycle-safe);
  * plain model names contribute nothing — their accounts show no budget row.
+ * comboByName is the page's map: combo name → models ARRAY (or a legacy
+ * `{models}` object).
  * @param {string[]} members
- * @param {Record<string, {models?: string[]}>} comboByName
+ * @param {Record<string, string[]|{models?: string[]}>} comboByName
  * @param {number} depth
  * @returns {Set<string>}
  */
@@ -40,7 +42,9 @@ export function memberProviders(members, comboByName, depth = 0) {
   for (const member of members) {
     if (!member || typeof member !== "string") continue;
     if (comboByName?.[member]) {
-      for (const id of memberProviders(comboByName[member].models, comboByName, depth + 1)) out.add(id);
+      const nested = comboByName[member];
+      const models = Array.isArray(nested) ? nested : nested?.models;
+      for (const id of memberProviders(models, comboByName, depth + 1)) out.add(id);
       continue;
     }
     const idx = member.indexOf("/");
