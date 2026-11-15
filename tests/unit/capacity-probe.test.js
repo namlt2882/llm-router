@@ -52,9 +52,11 @@ describe("probeConnectionModel", () => {
   it("true limit 5: ramp fails at 8, two refine steps confirm 5, peak never exceeds 8", async () => {
     const dispatch = fakeUpstream({ limit: 5 });
     const result = await probeConnectionModel({ ...TASK, dispatch });
-    expect(result).toEqual({ status: "ok", budget: 5 });
+    expect(result).toEqual({ status: "ok", budget: 5, requests: 26 });
     expect(dispatch.peak()).toBeLessThanOrEqual(8);
     expect(dispatch.peak()).toBeGreaterThanOrEqual(5); // it really reached 5
+    // audit trail: 1+2+4+8 ramp + 6 (fail) + 5 (ok) refine = 26 upstream calls
+    expect(result.requests).toBe(26);
   });
 
   it("a key refused at level 1 classifies instead of reporting a budget (throttle)", async () => {
@@ -92,7 +94,7 @@ describe("probeConnectionModel", () => {
   it("a limit above maxLevel caps the budget at maxLevel", async () => {
     const dispatch = fakeUpstream({ limit: 40 });
     const result = await probeConnectionModel({ ...TASK, maxLevel: 32, dispatch });
-    expect(result).toEqual({ status: "ok", budget: 32 });
+    expect(result).toEqual({ status: "ok", budget: 32, requests: 63 }); // 1+2+4+8+16+32
     expect(dispatch.peak()).toBeLessThanOrEqual(32);
   });
 
@@ -101,7 +103,7 @@ describe("probeConnectionModel", () => {
       limit: 2,
       fail: () => ({ ok: false, status: 200, bodyText: '{"error":"no choices"}' }),
     });
-    expect(await probeConnectionModel({ ...TASK, dispatch })).toEqual({ status: "ok", budget: 2 });
+    expect(await probeConnectionModel({ ...TASK, dispatch })).toEqual({ status: "ok", budget: 2, requests: 10 }); // 1+2+4 + refine 3
   });
 
   it("a dispatch that rejects reads as a failed call, not a crash", async () => {

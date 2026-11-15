@@ -36,8 +36,14 @@ export async function probeConnectionModel({ provider, connection, model, maxLev
   const levels = rampLevels(maxLevel);
   if (!levels.length) return { status: "unknown", reason: `no ramp level within maxLevel ${maxLevel}` };
 
+  let lo = 0; // last all-success level (0 = even the first burst failed)
+  let hi = null; // first failing level
+  let failInfo = null;
+  let requests = 0; // total upstream dispatches — the scan's audit trail
+
   // Fire `level` concurrent probes; the level passes iff every call is ok.
   const runLevel = async (level) => {
+    requests += level;
     const settled = await Promise.allSettled(
       Array.from({ length: level }, () => dispatch({ provider, connection, model }))
     );
@@ -51,10 +57,6 @@ export async function probeConnectionModel({ provider, connection, model, maxLev
     return { passed: true };
   };
 
-  let lo = 0; // last all-success level (0 = even the first burst failed)
-  let hi = null; // first failing level
-  let failInfo = null;
-
   for (const level of levels) {
     const outcome = await runLevel(level);
     if (outcome.unsupported) return UNSUPPORTED;
@@ -62,15 +64,15 @@ export async function probeConnectionModel({ provider, connection, model, maxLev
     lo = level;
   }
 
-  if (hi === null) return { status: "ok", budget: lo };
+  if (hi === null) return { status: "ok", budget: lo, requests };
 
   // The very first burst failed: there is no budget to report — classify why.
   if (lo === 0) {
     const kind = failInfo?.transportError
       ? "network"
       : classifyProbeError({ provider, status: failInfo?.status, bodyText: failInfo?.bodyText });
-    if (kind === "network") return { status: "unreachable", reason: snippet(failInfo) };
-    return { status: kind, reason: snippet(failInfo) };
+    if (kind === "network") return { status: "unreachable", reason: snippet(failInfo), requests };
+    return { status: kind, reason: snippet(failInfo), requests };
   }
 
   // Up to two binary-search steps between lo (pass) and hi (fail); once they
@@ -83,7 +85,7 @@ export async function probeConnectionModel({ provider, connection, model, maxLev
     if (outcome.failed) { hi = mid; failInfo = outcome.failed; } else { lo = mid; }
   }
 
-  return { status: "ok", budget: lo };
+  return { status: "ok", budget: lo, requests };
 }
 
 /**
