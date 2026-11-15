@@ -16,14 +16,16 @@
  */
 
 /**
- * Parse the raw combo fanout config into `{ budgets }`, or null when the
- * combo did not opt in. `enabled` must be exactly true; a budget counts only
- * when it is an integer >= 1 — 0, "3", 2.5 and negatives are dropped (they
- * fall back to the global limit at use time). An absent or empty budgets map
- * is valid: every account then runs at the global limit, and ranking is still
- * fanout's.
- * @param {{enabled?: unknown, budgets?: unknown}|null|undefined} cfg
- * @returns {{ budgets: Record<string, number> } | null}
+ * Parse the raw combo fanout config into `{ budgets, percent }`, or null when
+ * the combo did not opt in. `enabled` must be exactly true; a budget counts
+ * only when it is an integer >= 1 — 0, "3", 2.5 and negatives are dropped
+ * (they fall back to the resolved chain at use time). An absent or empty
+ * budgets map is valid: every account then runs at its detected-or-global
+ * level, and ranking is still fanout's. `percent` (the combo's margin on
+ * detected budgets) is an integer 1–100; anything else parses as 100 — never
+ * 0, so a typo can only widen the margin, never unroutable the combo.
+ * @param {{enabled?: unknown, budgets?: unknown, percent?: unknown}|null|undefined} cfg
+ * @returns {{ budgets: Record<string, number>, percent: number } | null}
  */
 export function parseFanoutCtx(cfg) {
   if (!cfg || typeof cfg !== "object" || cfg.enabled !== true) return null;
@@ -32,20 +34,60 @@ export function parseFanoutCtx(cfg) {
   for (const [id, value] of Object.entries(raw)) {
     if (Number.isInteger(value) && value >= 1) budgets[id] = value;
   }
-  return { budgets };
+  const percent = Number.isInteger(cfg.percent) && cfg.percent >= 1 && cfg.percent <= 100 ? cfg.percent : 100;
+  return { budgets, percent };
 }
 
 /**
- * Effective per-connection in-flight budget for a fanout request: the parsed
- * ctx's entry for the connection, else the global limit.
- * @param {{ budgets: Record<string, number> }|null} fanoutCtx
+ * Detected budget for one (connection, model) pair from the capacity scan
+ * (`settings.detectedBudgets`), or null when that pair was never measured or
+ * holds no integer >= 1. An untested model has NO budget — callers fall back
+ * to the global limit (ruling 2026-11-16: no min-aggregate, no
+ * representative-model guessing).
+ * @param {Record<string, Record<string, {budget?: unknown}>}|null|undefined} detected
  * @param {string} connectionId
+ * @param {string} model
+ * @returns {number | null}
+ */
+export function detectedBudgetFor(detected, connectionId, model) {
+  const value = detected?.[connectionId]?.[model]?.budget;
+  return Number.isInteger(value) && value >= 1 ? value : null;
+}
+
+/**
+ * Base per-account in-flight cap for EVERY strategy (ruling 2026-11-15):
+ * the scan's measured (connection, model) budget, else the global limit.
+ * @param {Parameters<detectedBudgetFor>[0]} detected
+ * @param {string} connectionId
+ * @param {string} model
  * @param {number} globalLimit
  * @returns {number}
  */
-export function effectiveFanoutBudget(fanoutCtx, connectionId, globalLimit) {
+export function effectiveBaseCap(detected, connectionId, model, globalLimit) {
+  return detectedBudgetFor(detected, connectionId, model) ?? globalLimit;
+}
+
+/**
+ * Effective per-connection in-flight budget for a fanout request —
+ * manual combo-entry budget (integer >= 1, exact and NEVER scaled) →
+ * floor(detected[conn][model] × ctx.percent / 100), min 1 → global limit.
+ * When `detected` or `model` is absent the chain is manual → global, which
+ * keeps the historical 3-arg behavior for existing callers.
+ * @param {{ budgets: Record<string, number>, percent?: number }|null} fanoutCtx
+ * @param {string} connectionId
+ * @param {number} globalLimit
+ * @param {Parameters<detectedBudgetFor>[0]} [detected]
+ * @param {string} [model]
+ * @returns {number}
+ */
+export function effectiveFanoutBudget(fanoutCtx, connectionId, globalLimit, detected = null, model = null) {
   const own = fanoutCtx?.budgets?.[connectionId];
-  return Number.isInteger(own) && own >= 1 ? own : globalLimit;
+  if (Number.isInteger(own) && own >= 1) return own;
+  if (detected && model) {
+    const value = detectedBudgetFor(detected, connectionId, model);
+    if (value !== null) return Math.max(1, Math.floor((value * (fanoutCtx?.percent ?? 100)) / 100));
+  }
+  return globalLimit;
 }
 
 /**
@@ -85,18 +127,19 @@ export function isFanoutEntry(entry) {
 }
 
 /**
- * Derive the fanout ctx auth.js consumes (`{ enabled: true, budgets }`) from
- * a combo-strategy entry, or null when the entry is not fanout. Budgets go
- * through parseFanoutCtx's sanitization; the strategy value already says
- * fanout, so `enabled` is forced true regardless of any stale legacy flag.
+ * Derive the fanout ctx auth.js consumes (`{ enabled: true, budgets, percent }`)
+ * from a combo-strategy entry, or null when the entry is not fanout. Budgets
+ * and percent go through parseFanoutCtx's sanitization; the strategy value
+ * already says fanout, so `enabled` is forced true regardless of any stale
+ * legacy flag.
  * @param {Parameters<isFanoutEntry>[0]} entry
- * @returns {{ budgets: Record<string, number> } | null}
+ * @returns {{ enabled: true, budgets: Record<string, number>, percent: number } | null}
  */
 export function fanoutCtxForEntry(entry) {
   if (!isFanoutEntry(entry)) return null;
   const fanout = entry.fanout && typeof entry.fanout === "object" ? entry.fanout : {};
   const parsed = parseFanoutCtx({ ...fanout, enabled: true });
-  // The wire shape auth.js re-parses: raw `{ enabled, budgets }`, not the
-  // parsed ctx parseFanoutCtx returns.
-  return { enabled: true, budgets: parsed.budgets };
+  // The wire shape auth.js re-parses: raw `{ enabled, budgets, percent }`, not
+  // the parsed ctx parseFanoutCtx returns.
+  return { enabled: true, budgets: parsed.budgets, percent: parsed.percent };
 }

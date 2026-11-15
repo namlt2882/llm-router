@@ -95,7 +95,7 @@ describe("combo fanout threading", () => {
     await handleChat(chatRequest("fanout-combo"));
     const props = mocks.handleComboChat.mock.calls[0][0];
     await props.handleSingleModel({}, "openai/gpt-4");
-    expect(fanoutOf()).toEqual({ enabled: true, budgets: { c1: 9 } });
+    expect(fanoutOf()).toEqual({ enabled: true, budgets: { c1: 9 }, percent: 100 });
   });
 
   it("combo without fanout passes fanout null", async () => {
@@ -115,7 +115,7 @@ describe("combo fanout threading", () => {
     await handleChat(chatRequest("fanout-combo"));
     const props = mocks.handleFusionChat.mock.calls[0][0];
     await props.handleSingleModel({}, "openai/gpt-4", false);
-    expect(fanoutOf()).toEqual({ enabled: true, budgets: { c2: 3 } });
+    expect(fanoutOf()).toEqual({ enabled: true, budgets: { c2: 3 }, percent: 100 });
   });
 
   it("nested combo legs use the inner combo's own fanout config", async () => {
@@ -136,7 +136,7 @@ describe("combo fanout threading", () => {
     await outerProps2.handleSingleModel({}, "inner-c");
     const innerProps2 = mocks.handleComboChat.mock.calls[3][0];
     await innerProps2.handleSingleModel({}, "openai/gpt-4");
-    expect(fanoutOf()).toEqual({ enabled: true, budgets: { c2: 3 } });
+    expect(fanoutOf()).toEqual({ enabled: true, budgets: { c2: 3 }, percent: 100 });
   });
 
   it("plain single-model request never carries fanout", async () => {
@@ -152,7 +152,7 @@ describe("combo fanout threading", () => {
     await handleChat(chatRequest("fanout-combo"));
     const props = mocks.handleComboChat.mock.calls[0][0];
     await props.handleSingleModel({}, "openai/gpt-4");
-    expect(fanoutOf()).toEqual({ enabled: true, budgets: { c1: 9 } });
+    expect(fanoutOf()).toEqual({ enabled: true, budgets: { c1: 9 }, percent: 100 });
   });
 
   it("strategy value fanout with no budgets map derives an empty ctx", async () => {
@@ -161,7 +161,7 @@ describe("combo fanout threading", () => {
     await handleChat(chatRequest("fanout-combo"));
     const props = mocks.handleComboChat.mock.calls[0][0];
     await props.handleSingleModel({}, "openai/gpt-4");
-    expect(fanoutOf()).toEqual({ enabled: true, budgets: {} });
+    expect(fanoutOf()).toEqual({ enabled: true, budgets: {}, percent: 100 });
   });
 
   it("an unselected strategy with a stale disabled fanout passes null", async () => {
