@@ -97,3 +97,34 @@ describe("requireLogin=false does not open a ticket-gated router", () => {
     expect(await proxy(request("/dashboard"))).toBe(mocks.nextResponse);
   });
 });
+
+describe("fork admin API through the guard (patch #18)", () => {
+  const withHeaders = (urlPath, headers) => {
+    const r = request(urlPath);
+    r.headers = new Headers({ host: "router.test", ...headers });
+    return r;
+  };
+
+  it("lets the fork admin bearer reach /api/fork/limits without a cookie", async () => {
+    vi.stubEnv("WAVEBOT_FORK_ADMIN_TOKEN", "fork-secret");
+    const res = await proxy(withHeaders("/api/fork/limits", { authorization: "Bearer fork-secret" }));
+    expect(res).toBe(mocks.nextResponse);
+  });
+
+  it("lets the fork admin bearer reach /api/fork/load", async () => {
+    vi.stubEnv("WAVEBOT_FORK_ADMIN_TOKEN", "fork-secret");
+    const res = await proxy(withHeaders("/api/fork/load", { authorization: "Bearer fork-secret" }));
+    expect(res).toBe(mocks.nextResponse);
+  });
+
+  it("still refuses a wrong bearer and an anonymous call with 401", async () => {
+    vi.stubEnv("WAVEBOT_FORK_ADMIN_TOKEN", "fork-secret");
+    expect((await proxy(withHeaders("/api/fork/limits", { authorization: "Bearer nope" }))).status).toBe(401);
+    expect((await proxy(request("/api/fork/limits"))).status).toBe(401);
+  });
+
+  it("an unset token never matches an empty bearer", async () => {
+    vi.stubEnv("WAVEBOT_FORK_ADMIN_TOKEN", "");
+    expect((await proxy(withHeaders("/api/fork/limits", { authorization: "Bearer " }))).status).toBe(401);
+  });
+});
