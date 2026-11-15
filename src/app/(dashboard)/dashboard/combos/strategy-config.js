@@ -2,7 +2,9 @@
  * Pure helpers for the combos page's per-combo strategy settings
  * (settings.comboStrategies[name]). Kept out of page.js so the merge rules —
  * in particular the patch-#19 rules for when a fanout key survives a merge —
- * are unit-testable without a React test harness.
+ * are unit-testable without a React test harness. Fanout renders no per-
+ * account UI on the card (ruling 2026-11-15): budgets live in the settings
+ * entry and are honored at routing time, not edited on the card.
  */
 
 /**
@@ -32,86 +34,4 @@ export function mergeStrategyPatch(currentEntry, patch) {
   const fallbackAtDefault = !next.fallbackStrategy || next.fallbackStrategy === "fallback";
   if (fallbackAtDefault && !next.fanout) return null;
   return next;
-}
-
-/**
- * Provider ids referenced by combo members, for the fanout budget editor.
- * A member with a "/" contributes the part before the first slash; a member
- * naming another combo recurses into its models (depth-capped, cycle-safe);
- * plain model names contribute nothing — their accounts show no budget row.
- * comboByName is the page's map: combo name → models ARRAY (or a legacy
- * `{models}` object).
- * @param {string[]} members
- * @param {Record<string, string[]|{models?: string[]}>} comboByName
- * @param {number} depth
- * @returns {Set<string>}
- */
-export function memberProviders(members, comboByName, depth = 0) {
-  const out = new Set();
-  if (!Array.isArray(members) || depth >= 3) return out;
-  for (const member of members) {
-    if (!member || typeof member !== "string") continue;
-    if (comboByName?.[member]) {
-      const nested = comboByName[member];
-      const models = Array.isArray(nested) ? nested : nested?.models;
-      for (const id of memberProviders(models, comboByName, depth + 1)) out.add(id);
-      continue;
-    }
-    const idx = member.indexOf("/");
-    if (idx > 0) out.add(member.slice(0, idx));
-  }
-  return out;
-}
-
-/**
- * Connections that get a budget row in the fanout editor. A member is written
- * with the provider's PREFIX ("fnt/model-id" for a custom endpoint,
- * "openai/gpt-4" for a registry provider), while a connection identifies as
- * either that prefix (`provider` for registry providers) or a dynamic id with
- * the prefix in `providerSpecificData.prefix` (custom endpoints) — accept both.
- * @param {Array<{provider?: string, providerSpecificData?: {prefix?: string}}>|null} activeProviders
- * @param {string[]} members
- * @param {Record<string, string[]|{models?: string[]}>} comboByName
- * @returns {Array}
- */
-export function fanoutBudgetRows(activeProviders, members, comboByName) {
-  const wanted = memberProviders(members, comboByName);
-  return (activeProviders || []).filter((c) => wanted.has(c?.provider) || wanted.has(c?.providerSpecificData?.prefix));
-}
-
-/**
- * Rows the fanout editor renders for a pool this size or smaller: every
- * matching connection. A pool larger than this switches to budgeted + search
- * rows — rendering hundreds of inputs serves no one (ruling 2026-11-15).
- * @type {number}
- */
-export const FANOUT_EDITOR_INLINE_LIMIT = 20;
-
-/**
- * Connections from `rows` that carry a budget in `budgets` — the rows the
- * editor always shows, whatever the pool size.
- * @param {Array<{id: string, name?: string}>} rows
- * @param {Record<string, number>|undefined} budgets
- * @returns {typeof rows}
- */
-export function budgetedFanoutRows(rows, budgets) {
-  return (rows || []).filter((r) => budgets?.[r.id] !== undefined);
-}
-
-/**
- * Connections from `rows` matching `query` by name that do NOT yet carry a
- * budget — the editor's search candidates, capped at `cap`. An empty or
- * blank query yields no rows.
- * @param {Array<{id: string, name?: string}>} rows
- * @param {Record<string, number>|undefined} budgets
- * @param {string} query
- * @param {number} cap
- * @returns {typeof rows}
- */
-export function fanoutSearchRows(rows, budgets, query, cap = 10) {
-  const q = String(query || "").trim().toLowerCase();
-  if (!q) return [];
-  return (rows || [])
-    .filter((r) => budgets?.[r.id] === undefined && String(r.name || "").toLowerCase().includes(q))
-    .slice(0, cap);
 }

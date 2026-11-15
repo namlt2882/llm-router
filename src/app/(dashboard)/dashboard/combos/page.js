@@ -10,8 +10,7 @@ import { useCopyToClipboard } from "@/shared/hooks/useCopyToClipboard";
 import { useModelCaps } from "@/shared/hooks/useModelCaps";
 import { aggregateComboCapabilities } from "open-sse/providers/capabilities.js";
 import { resolveProviderId, AI_PROVIDERS } from "@/shared/constants/providers";
-import { mergeStrategyPatch, fanoutBudgetRows, budgetedFanoutRows, fanoutSearchRows, FANOUT_EDITOR_INLINE_LIMIT } from "./strategy-config.js";
-import { isFanoutEntry } from "../../../../sse/services/fanoutBudget.js";
+import { mergeStrategyPatch } from "./strategy-config.js";
 
 // Validate combo name: only a-z, A-Z, 0-9, -, _
 const VALID_NAME_REGEX = /^[a-zA-Z0-9_.\-]+$/;
@@ -655,136 +654,6 @@ function getRouterModelStatus(routerModel, activeProviders) {
   return { ready: false, label: "Not configured", providerId };
 }
 
-// Fanout concurrency section (patch #19): budget inputs for the combo's
-// member-provider accounts, shown when the combo's strategy routes as fanout
-// (ruling 2026-11-15 — fanout is a strategy value in the dropdown, not a
-// checkbox; legacy entries with fanout.enabled === true still qualify via
-// isFanoutEntry). A pool at or under FANOUT_EDITOR_INLINE_LIMIT renders every
-// account; a bigger pool renders only budgeted accounts plus search results,
-// so a provider with hundreds of connections never floods the card. Empty
-// input = the account runs at the global in-flight limit; a number gives it
-// its own budget (integer >= 1). Edits are held locally and persisted
-// debounced, so rapid keystrokes collapse into one PATCH instead of racing
-// full-map writes against each other.
-const FANOUT_PERSIST_DEBOUNCE_MS = 400;
-function FanoutSection({ combo, comboByName = {}, activeProviders = [], strategy = {}, onSetStrategy }) {
-  const isFanout = isFanoutEntry(strategy);
-  const fanout = strategy.fanout;
-  const [localBudgets, setLocalBudgets] = useState(null);
-  const localRef = useRef(null);
-  const timerRef = useRef(null);
-  const pendingRef = useRef(null);
-  const onSetRef = useRef(onSetStrategy);
-  const budgets = localBudgets ?? fanout?.budgets ?? {};
-  const rows = isFanout
-    ? fanoutBudgetRows(activeProviders, combo.models, comboByName)
-    : [];
-  // Ruling 2026-11-15 (Steve): never render the whole pool. Small pools show
-  // every account; a big one shows only budgeted accounts plus search results
-  // for finding the next one to budget.
-  const [query, setQuery] = useState("");
-  const many = rows.length > FANOUT_EDITOR_INLINE_LIMIT;
-  const visible = many
-    ? [...budgetedFanoutRows(rows, budgets), ...fanoutSearchRows(rows, budgets, query)]
-    : rows;
-
-  const persist = (next) => {
-    pendingRef.current = null;
-    if (timerRef.current) { clearTimeout(timerRef.current); timerRef.current = null; }
-    onSetRef.current({ fanout: { enabled: true, budgets: next } });
-  };
-  const schedule = (next) => {
-    pendingRef.current = next;
-    if (timerRef.current) clearTimeout(timerRef.current);
-    timerRef.current = setTimeout(() => persist(pendingRef.current), FANOUT_PERSIST_DEBOUNCE_MS);
-  };
-  const setBudget = (id, raw) => {
-    const value = String(raw).trim();
-    const next = { ...(localRef.current ?? fanout?.budgets ?? {}) };
-    if (value === "") {
-      delete next[id];
-    } else {
-      const parsed = Number(value);
-      if (!Number.isInteger(parsed) || parsed < 1) return; // snap back; the input's title explains the rule
-      next[id] = parsed;
-    }
-    localRef.current = next;
-    setLocalBudgets(next);
-    schedule(next);
-  };
-  useEffect(() => () => {
-    // Flush a pending edit so navigating away within the debounce window does not lose it.
-    if (timerRef.current) { clearTimeout(timerRef.current); timerRef.current = null; }
-    if (pendingRef.current) onSetRef.current({ fanout: { enabled: true, budgets: pendingRef.current } });
-    pendingRef.current = null;
-  }, []);
-  useEffect(() => { onSetRef.current = onSetStrategy; });
-  useEffect(() => {
-    // The strategy left fanout: drop local edits AND cancel a pending persist —
-    // otherwise the card keeps showing phantom budgets and a late debounce (or
-    // the unmount flush above) would resurrect a fanout key the user just
-    // switched away from. (Live-found 2026-11-15: after Fanout → Fallback →
-    // Fanout the card still showed the old budgets while the server had none.)
-    if (!isFanout && (localRef.current || pendingRef.current || timerRef.current)) {
-      localRef.current = null;
-      pendingRef.current = null;
-      if (timerRef.current) { clearTimeout(timerRef.current); timerRef.current = null; }
-      setLocalBudgets(null);
-    }
-  }, [isFanout]);
-
-  if (!isFanout) return null;
-
-  return (
-    <div className="w-full border-t border-border/60 px-4 py-2">
-      <div className="flex items-center justify-between gap-2">
-        <span className="text-[11px] font-medium text-text-main">
-          Fanout concurrency
-          {rows.length > 0 && <span className="ml-1 font-normal text-text-muted">· {rows.length} accounts</span>}
-        </span>
-        <span className="text-[10px] text-text-muted" title="Each account runs at its own in-flight budget; the combo's pool is the sum of budgets. Empty = global limit.">
-          pool = Σ budgets
-        </span>
-      </div>
-      {many && (
-        <input
-          type="text"
-          className="mt-1.5 w-full rounded border border-border/70 bg-transparent px-2 py-1 text-[11px] text-text-main placeholder:text-text-muted"
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          placeholder={`Search an account to set its budget (${rows.length} accounts)`}
-        />
-      )}
-      {/* A provider can carry hundreds of connections; cap the editor's height
-          and scroll inside it instead of stretching the combo card. */}
-      <div className="mt-1.5 grid max-h-48 gap-1 overflow-y-auto pr-1">
-        {visible.map((c) => (
-          <div key={c.id} className="flex items-center justify-between gap-2 text-[11px]">
-            <span className="truncate text-text-muted" title={`${c.provider} — ${c.id}`}>{c.name || c.id.slice(0, 8)}</span>
-            <input
-              type="number"
-              min="1"
-              step="1"
-              className="w-16 rounded border border-border/70 bg-transparent px-1.5 py-0.5 text-[11px] text-text-main"
-              value={budgets[c.id] ?? ""}
-              onChange={(e) => setBudget(c.id, e.target.value)}
-              onBlur={() => { if (pendingRef.current) persist(pendingRef.current); }}
-              placeholder="global"
-              title="In-flight budget for this account: integer >= 1; empty = global limit (invalid input snaps back)"
-            />
-          </div>
-        ))}
-        {rows.length === 0 && (
-          <p className="text-[10px] text-text-muted">No active account matches this combo&apos;s members.</p>
-        )}
-        {rows.length > 0 && visible.length === 0 && (
-          <p className="text-[10px] text-text-muted">Search an account by name to set its budget.</p>
-        )}
-      </div>
-    </div>
-  );
-}
-
 function ComboCard({ combo, getCaps, comboByName = {}, activeProviders = [], copied, onCopy, onEdit, onDelete, strategy = {}, onSetStrategy, selected = false, onToggleSelect }) {
   const [showJudgeSelect, setShowJudgeSelect] = useState(false);
   const [showRouterSelect, setShowRouterSelect] = useState(false);
@@ -961,16 +830,6 @@ function ComboCard({ combo, getCaps, comboByName = {}, activeProviders = [], cop
           </div>
         </div>
       </div>
-
-      {/* Fanout concurrency (patch #19): per-account in-flight budgets. The combo's
-          pool becomes the sum of its accounts' budgets instead of one global cap. */}
-      <FanoutSection
-        combo={combo}
-        comboByName={comboByName}
-        activeProviders={activeProviders}
-        strategy={strategy}
-        onSetStrategy={onSetStrategy}
-      />
 
       {/* Judge model picker (single-select; combo members make natural judges too) */}
       {showJudgeSelect && (
