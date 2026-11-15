@@ -143,4 +143,36 @@ describe("combo fanout threading", () => {
     await handleChat(chatRequest("openai/gpt-4"));
     expect(mocks.getProviderCredentials.mock.calls[0][3].fanout ?? null).toBe(null);
   });
+
+  // Strategy-value semantics (ruling 2026-11-15): the dropdown writes
+  // fallbackStrategy: "fanout", not a checkbox. No `enabled` field required.
+  it("strategy value fanout derives the ctx without an enabled flag", async () => {
+    h.combos["fanout-combo"] = ["openai/gpt-4"];
+    h.settings.comboStrategies["fanout-combo"] = { fallbackStrategy: "fanout", fanout: { budgets: { c1: 9 } } };
+    await handleChat(chatRequest("fanout-combo"));
+    const props = mocks.handleComboChat.mock.calls[0][0];
+    await props.handleSingleModel({}, "openai/gpt-4");
+    expect(fanoutOf()).toEqual({ enabled: true, budgets: { c1: 9 } });
+  });
+
+  it("strategy value fanout with no budgets map derives an empty ctx", async () => {
+    h.combos["fanout-combo"] = ["openai/gpt-4"];
+    h.settings.comboStrategies["fanout-combo"] = { fallbackStrategy: "fanout" };
+    await handleChat(chatRequest("fanout-combo"));
+    const props = mocks.handleComboChat.mock.calls[0][0];
+    await props.handleSingleModel({}, "openai/gpt-4");
+    expect(fanoutOf()).toEqual({ enabled: true, budgets: {} });
+  });
+
+  it("an unselected strategy with a stale disabled fanout passes null", async () => {
+    h.combos["fanout-combo"] = ["openai/gpt-4"];
+    h.settings.comboStrategies["fanout-combo"] = {
+      fallbackStrategy: "fallback",
+      fanout: { enabled: false, budgets: { c1: 9 } },
+    };
+    await handleChat(chatRequest("fanout-combo"));
+    const props = mocks.handleComboChat.mock.calls[0][0];
+    await props.handleSingleModel({}, "openai/gpt-4");
+    expect(fanoutOf()).toBe(null);
+  });
 });

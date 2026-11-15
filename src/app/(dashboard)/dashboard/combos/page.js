@@ -11,6 +11,7 @@ import { useModelCaps } from "@/shared/hooks/useModelCaps";
 import { aggregateComboCapabilities } from "open-sse/providers/capabilities.js";
 import { resolveProviderId, AI_PROVIDERS } from "@/shared/constants/providers";
 import { mergeStrategyPatch, fanoutBudgetRows } from "./strategy-config.js";
+import { isFanoutEntry } from "../../../../sse/services/fanoutBudget.js";
 
 // Validate combo name: only a-z, A-Z, 0-9, -, _
 const VALID_NAME_REGEX = /^[a-zA-Z0-9_.\-]+$/;
@@ -53,6 +54,9 @@ const STRATEGY_OPTIONS = [
   { value: "round-robin", label: "Round Robin — rotate" },
   { value: "smart", label: "Smart Router — System One" },
   { value: "fusion", label: "Fusion — panel + judge" },
+  // Ruling 2026-11-15: fanout is a strategy value, not an additive checkbox —
+  // it cannot coexist with the others, so it lives in this same dropdown.
+  { value: "fanout", label: "Fanout — fan accounts by budget" },
 ];
 
 function getPolicyBadgeLabel(strategy = {}) {
@@ -396,6 +400,7 @@ export default function CombosPage() {
             <li><span className="font-medium text-text-main">Round Robin</span> — rotates models across requests to spread load</li>
             <li><span className="font-medium text-text-main">Smart Router</span> — queries a System One decision model to pick the optimal model before generation; supports Smart Switch (adaptive hysteresis), Strict Lock (1 task = 1 session, +0ms latency), and Per-Turn modes to maximize prompt-cache retention</li>
             <li><span className="font-medium text-text-main">Fusion</span> — queries all models in parallel, then a judge synthesizes one answer. Best quality, but costs the most: every request bills all panel models + the judge (N+1 calls)</li>
+            <li><span className="font-medium text-text-main">Fanout</span> — fans each request across the combo&apos;s accounts, picking the one with the most free in-flight budget; the pool is the SUM of per-account budgets instead of one global cap</li>
           </ul>
           <p className="hidden text-xs text-text-muted mt-3 max-w-2xl">
             <span className="font-medium text-text-main">Cursor / Claude Default</span> create combos named exactly like those clients&apos; model IDs (e.g. <code className="font-mono">composer-2.5</code>, <code className="font-mono">opus</code>), seeded with the matching <code className="font-mono">cu/…</code> or <code className="font-mono">cc/…</code> route so traffic can hit 9router without the prefix.
@@ -650,22 +655,25 @@ function getRouterModelStatus(routerModel, activeProviders) {
   return { ready: false, label: "Not configured", providerId };
 }
 
-// Fanout concurrency section (patch #19): toggle + one budget input per account
-// of the combo's member providers. Empty input = the account runs at the global
-// in-flight limit; a number gives it its own budget (integer >= 1). Edits are
-// held locally and persisted debounced, so rapid keystrokes collapse into one
+// Fanout concurrency section (patch #19): one budget input per account of the
+// combo's member providers, shown when the combo's strategy routes as fanout
+// (ruling 2026-11-15 — fanout is a strategy value in the dropdown, not a
+// checkbox; legacy entries with fanout.enabled === true still qualify via
+// isFanoutEntry). Empty input = the account runs at the global in-flight
+// limit; a number gives it its own budget (integer >= 1). Edits are held
+// locally and persisted debounced, so rapid keystrokes collapse into one
 // PATCH instead of racing full-map writes against each other.
 const FANOUT_PERSIST_DEBOUNCE_MS = 400;
 function FanoutSection({ combo, comboByName = {}, activeProviders = [], strategy = {}, onSetStrategy }) {
+  const isFanout = isFanoutEntry(strategy);
   const fanout = strategy.fanout;
-  const enabled = fanout?.enabled === true;
   const [localBudgets, setLocalBudgets] = useState(null);
   const localRef = useRef(null);
   const timerRef = useRef(null);
   const pendingRef = useRef(null);
   const onSetRef = useRef(onSetStrategy);
   const budgets = localBudgets ?? fanout?.budgets ?? {};
-  const rows = enabled
+  const rows = isFanout
     ? fanoutBudgetRows(activeProviders, combo.models, comboByName)
     : [];
 
@@ -693,14 +701,6 @@ function FanoutSection({ combo, comboByName = {}, activeProviders = [], strategy
     setLocalBudgets(next);
     schedule(next);
   };
-  const toggle = () => {
-    // A pending persist must not resurrect fanout after an explicit toggle-off.
-    if (timerRef.current) { clearTimeout(timerRef.current); timerRef.current = null; }
-    pendingRef.current = null;
-    localRef.current = null;
-    setLocalBudgets(null);
-    onSetStrategy({ fanout: enabled ? null : { enabled: true, budgets: {} } });
-  };
   useEffect(() => () => {
     // Flush a pending edit so navigating away within the debounce window does not lose it.
     if (timerRef.current) { clearTimeout(timerRef.current); timerRef.current = null; }
@@ -708,47 +708,51 @@ function FanoutSection({ combo, comboByName = {}, activeProviders = [], strategy
     pendingRef.current = null;
   }, []);
   useEffect(() => { onSetRef.current = onSetStrategy; });
+  useEffect(() => {
+    // The strategy left fanout: drop local edits AND cancel a pending persist —
+    // otherwise the card keeps showing phantom budgets and a late debounce (or
+    // the unmount flush above) would resurrect a fanout key the user just
+    // switched away from. (Live-found 2026-11-15: after Fanout → Fallback →
+    // Fanout the card still showed the old budgets while the server had none.)
+    if (!isFanout && (localRef.current || pendingRef.current || timerRef.current)) {
+      localRef.current = null;
+      pendingRef.current = null;
+      if (timerRef.current) { clearTimeout(timerRef.current); timerRef.current = null; }
+      setLocalBudgets(null);
+    }
+  }, [isFanout]);
 
-  if (!enabled && rows.length === 0 && !(activeProviders || []).length) return null;
+  if (!isFanout) return null;
 
   return (
     <div className="w-full border-t border-border/60 px-4 py-2">
       <div className="flex items-center justify-between gap-2">
-        <label className="flex items-center gap-2 text-[11px] font-medium text-text-main">
-          <input
-            type="checkbox"
-            checked={enabled}
-            onChange={toggle}
-          />
-          Fanout concurrency
-        </label>
+        <span className="text-[11px] font-medium text-text-main">Fanout concurrency</span>
         <span className="text-[10px] text-text-muted" title="Each account runs at its own in-flight budget; the combo's pool is the sum of budgets. Empty = global limit.">
           pool = Σ budgets
         </span>
       </div>
-      {enabled && (
-        <div className="mt-1.5 grid gap-1">
-          {rows.map((c) => (
-            <div key={c.id} className="flex items-center justify-between gap-2 text-[11px]">
-              <span className="truncate text-text-muted" title={`${c.provider} — ${c.id}`}>{c.name || c.id.slice(0, 8)}</span>
-              <input
-                type="number"
-                min="1"
-                step="1"
-                className="w-16 rounded border border-border/70 bg-transparent px-1.5 py-0.5 text-[11px] text-text-main"
-                value={budgets[c.id] ?? ""}
-                onChange={(e) => setBudget(c.id, e.target.value)}
-                onBlur={() => { if (pendingRef.current) persist(pendingRef.current); }}
-                placeholder="global"
-                title="In-flight budget for this account: integer >= 1; empty = global limit (invalid input snaps back)"
-              />
-            </div>
-          ))}
-          {rows.length === 0 && (
-            <p className="text-[10px] text-text-muted">No active account matches this combo&apos;s members.</p>
-          )}
-        </div>
-      )}
+      <div className="mt-1.5 grid gap-1">
+        {rows.map((c) => (
+          <div key={c.id} className="flex items-center justify-between gap-2 text-[11px]">
+            <span className="truncate text-text-muted" title={`${c.provider} — ${c.id}`}>{c.name || c.id.slice(0, 8)}</span>
+            <input
+              type="number"
+              min="1"
+              step="1"
+              className="w-16 rounded border border-border/70 bg-transparent px-1.5 py-0.5 text-[11px] text-text-main"
+              value={budgets[c.id] ?? ""}
+              onChange={(e) => setBudget(c.id, e.target.value)}
+              onBlur={() => { if (pendingRef.current) persist(pendingRef.current); }}
+              placeholder="global"
+              title="In-flight budget for this account: integer >= 1; empty = global limit (invalid input snaps back)"
+            />
+          </div>
+        ))}
+        {rows.length === 0 && (
+          <p className="text-[10px] text-text-muted">No active account matches this combo&apos;s members.</p>
+        )}
+      </div>
     </div>
   );
 }

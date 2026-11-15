@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseFanoutCtx, effectiveFanoutBudget, rankFanout } from "../../src/sse/services/fanoutBudget.js";
+import { parseFanoutCtx, effectiveFanoutBudget, rankFanout, isFanoutEntry, fanoutCtxForEntry } from "../../src/sse/services/fanoutBudget.js";
 
 describe("parseFanoutCtx", () => {
   it("returns null unless enabled is exactly true", () => {
@@ -59,5 +59,33 @@ describe("rankFanout", () => {
     const rows = [row({ id: "b" }), row({ id: "a" })];
     rankFanout(rows);
     expect(rows.map((r) => r.id)).toEqual(["b", "a"]);
+  });
+});
+
+describe("isFanoutEntry / fanoutCtxForEntry (strategy-value semantics)", () => {
+  // Steve's ruling (2026-11-15): fanout is a combo STRATEGY value in the
+  // dropdown, not an additive checkbox. An entry is fanout when its
+  // fallbackStrategy is "fanout", or — legacy checkbox entries — its
+  // fanout.enabled is exactly true.
+  it("recognises the strategy value", () => {
+    expect(isFanoutEntry({ fallbackStrategy: "fanout", fanout: { budgets: { a: 2 } } })).toBe(true);
+    expect(isFanoutEntry({ fallbackStrategy: "fanout" })).toBe(true);
+    expect(isFanoutEntry({ fallbackStrategy: "fusion" })).toBe(false);
+    expect(isFanoutEntry({})).toBe(false);
+    expect(isFanoutEntry(null)).toBe(false);
+  });
+
+  it("recognises the legacy checkbox entry so existing settings keep working", () => {
+    expect(isFanoutEntry({ fanout: { enabled: true, budgets: { a: 2 } } })).toBe(true);
+    expect(isFanoutEntry({ fanout: { enabled: false, budgets: { a: 2 } } })).toBe(false);
+    expect(isFanoutEntry({ fallbackStrategy: "fallback", fanout: { enabled: true } })).toBe(true);
+  });
+
+  it("derives an auth.js-ready ctx with sanitized budgets", () => {
+    expect(fanoutCtxForEntry({ fallbackStrategy: "fanout", fanout: { budgets: { a: 2, junk: "x", neg: -1 } } }))
+      .toEqual({ enabled: true, budgets: { a: 2 } });
+    expect(fanoutCtxForEntry({ fallbackStrategy: "fanout" })).toEqual({ enabled: true, budgets: {} });
+    expect(fanoutCtxForEntry({ fallbackStrategy: "fusion" })).toBe(null);
+    expect(fanoutCtxForEntry({ fanout: { enabled: true, budgets: { a: 1 } } })).toEqual({ enabled: true, budgets: { a: 1 } });
   });
 });

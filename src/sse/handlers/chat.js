@@ -8,6 +8,7 @@ import {
   isValidApiKey,
 } from "../services/auth.js";
 import { parsePriority } from "../services/accountInflight.js";
+import { fanoutCtxForEntry } from "../services/fanoutBudget.js";
 import { handleAntigravityQuotaError, clearAntigravityStrikes } from "../services/antigravityQuota.js";
 import { getSettings } from "@/lib/localDb";
 import { getModelInfo, getComboModels } from "../services/model.js";
@@ -118,8 +119,10 @@ export async function handleChat(request, clientRawRequest = null) {
     const comboStrategy = comboSpecificStrategy || settings.comboStrategy || "fallback";
     // Fork patch #19: the combo's fanout config rides raw to account selection
     // (auth.js parses it). Nested combos re-derive it from their OWN name, so
-    // the innermost combo's config wins for its legs.
-    const fanoutCfg = (comboStrategies[modelStr] || {}).fanout || null;
+    // the innermost combo's config wins for its legs. The entry routes as
+    // fanout when its strategy value is "fanout" (dropdown) or — legacy — its
+    // fanout.enabled is exactly true.
+    const fanoutCfg = fanoutCtxForEntry(comboStrategies[modelStr]);
     const augmentedModels = await filterAdapterModels(keyAccess, augmentModelsWithCapacityAdapter(comboModels, requiredCapabilities, settings), comboModels);
     const adapterAdded = augmentedModels.filter((m) => !comboModels.includes(m));
 
@@ -211,7 +214,7 @@ async function handleSingleModelChat(body, modelStr, clientRawRequest = null, re
       const comboStrategy = comboSpecificStrategy || chatSettings.comboStrategy || "fallback";
       // Innermost combo wins: a member that is itself a combo uses ITS OWN
       // fanout config, never the one inherited from the outer combo.
-      const nestedFanoutCfg = (comboStrategies[modelStr] || {}).fanout || null;
+      const nestedFanoutCfg = fanoutCtxForEntry(comboStrategies[modelStr]);
       const requiredCapabilities = detectRequiredCapabilities(body);
       // Nested combo (a combo member that is itself a combo): the access decision
       // was made on the outer target; only drop adapter models the key may not call.

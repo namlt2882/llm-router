@@ -69,3 +69,34 @@ export function rankFanout(rows) {
     // nullish, not falsy: priority 0 is the HIGHEST priority and must keep it.
     || (a.priority ?? 999) - (b.priority ?? 999));
 }
+
+/**
+ * Whether a combo-strategy entry routes as fanout. The canonical form is the
+ * strategy value — `fallbackStrategy === "fanout"` in the dropdown (ruling
+ * 2026-11-15: fanout is one combo strategy, not an additive checkbox).
+ * Legacy checkbox entries (`fanout.enabled === true` on any strategy) keep
+ * working so existing settings don't silently change behavior.
+ * @param {{fallbackStrategy?: unknown, fanout?: unknown}|null|undefined} entry
+ * @returns {boolean}
+ */
+export function isFanoutEntry(entry) {
+  if (!entry || typeof entry !== "object") return false;
+  return entry.fallbackStrategy === "fanout" || entry.fanout?.enabled === true;
+}
+
+/**
+ * Derive the fanout ctx auth.js consumes (`{ enabled: true, budgets }`) from
+ * a combo-strategy entry, or null when the entry is not fanout. Budgets go
+ * through parseFanoutCtx's sanitization; the strategy value already says
+ * fanout, so `enabled` is forced true regardless of any stale legacy flag.
+ * @param {Parameters<isFanoutEntry>[0]} entry
+ * @returns {{ budgets: Record<string, number> } | null}
+ */
+export function fanoutCtxForEntry(entry) {
+  if (!isFanoutEntry(entry)) return null;
+  const fanout = entry.fanout && typeof entry.fanout === "object" ? entry.fanout : {};
+  const parsed = parseFanoutCtx({ ...fanout, enabled: true });
+  // The wire shape auth.js re-parses: raw `{ enabled, budgets }`, not the
+  // parsed ctx parseFanoutCtx returns.
+  return { enabled: true, budgets: parsed.budgets };
+}
