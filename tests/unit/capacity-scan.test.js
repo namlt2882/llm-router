@@ -231,3 +231,64 @@ describe("ensureCapacityScheduler", () => {
     }
   });
 });
+
+// Final-review fixes (2026-11-16): the scan must hand the probe the REFRESHED
+// credentials, and a scan in flight must be an in-process mutex whose final
+// write merges fresh settings — a mid-scan operator change must not be
+// reverted, and two racing runs must not double the probe traffic.
+describe("review fixes: refreshed creds + scan mutex", () => {
+  it("the probe receives checkAndRefreshToken's REFRESHED connection, not the stale row", async () => {
+    const env = makeEnv();
+    env.connections = [conn("c1", { data: { accessToken: "stale" } })];
+    env.settings = { diagnosticModels: { c1: ["m1"] } };
+    const probedConnections = [];
+    const originalProbe = env.probeFn;
+    env.probeFn = async (task) => {
+      probedConnections.push(task.connection);
+      return originalProbe(task);
+    };
+    env.checkAndRefreshToken = async (_provider, c) => {
+      env.refreshes.push(c.id);
+      return { ...c, data: { accessToken: "refreshed" } };
+    };
+    await runCapacityScan(env.scanDeps());
+    expect(env.refreshes).toEqual(["c1"]);
+    expect(probedConnections[0].data.accessToken).toBe("refreshed");
+  });
+
+  it("the final write merges the FRESH capacityScan — a mid-scan operator change is not reverted", async () => {
+    const env = makeEnv();
+    env.connections = [conn("c1")];
+    env.settings.capacityScan = { enabled: true, intervalHours: 24 };
+    const originalUpdate = env.updateSettings;
+    env.updateSettings = async (patch) => {
+      await originalUpdate(patch);
+      // An operator disables the scan while it runs — right after the
+      // running:true persist, before the final write.
+      if (patch.capacityScan?.running === true) {
+        env.settings = { ...env.settings, capacityScan: { ...env.settings.capacityScan, enabled: false, intervalHours: 6 } };
+      }
+    };
+    await runCapacityScan(env.scanDeps());
+    const finalState = env.settings.capacityScan;
+    expect(finalState.enabled).toBe(false);
+    expect(finalState.intervalHours).toBe(6);
+    expect(finalState.running).toBe(false);
+    expect(finalState.lastResult).toBeTruthy();
+    expect(finalState.nextRunAt).toBeTruthy();
+  });
+
+  it("an in-flight scan is a mutex: a second concurrent run refuses, it never doubles the probes", async () => {
+    const env = makeEnv();
+    env.connections = [conn("c1")];
+    env.settings = { diagnosticModels: { c1: ["m1"] } };
+    const [r1, r2] = await Promise.all([runCapacityScan(env.scanDeps()), runCapacityScan(env.scanDeps())]);
+    const winner = [r1, r2].find((r) => !r.alreadyRunning);
+    const loser = [r1, r2].find((r) => r.alreadyRunning);
+    expect(winner).toBeTruthy();
+    expect(loser).toBeTruthy();
+    expect(env.probes.length).toBe(1);
+    // exactly one scan persisted a running flag
+    expect(env.updates.filter((u) => u.capacityScan?.running === true).length).toBe(1);
+  });
+});

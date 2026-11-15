@@ -65,6 +65,12 @@ const isActiveConnection = (c) => c.isActive === true || c.isactive === "1";
  * @param {object} [deps.getSettings] …each defaults to the real implementation
  * @returns {Promise<{scanned: number, detected: number, skipped: number, unknown: number, probeRequests: number, perProvider: {provider: string, reason: string, count: number}[]} | {alreadyRunning: true}>}
  */
+// In-process mutex: two racing callers (POST + scheduler tick) can both pass
+// the persisted-running guard below before either write lands — the mutex
+// closes that window synchronously. The settings flag stays as the
+// cross-instance guard.
+let scanInFlight = false;
+
 export async function runCapacityScan({
   getSettings: getSettingsDep = getSettings,
   updateSettings: updateSettingsDep = updateSettings,
@@ -75,6 +81,25 @@ export async function runCapacityScan({
   now = () => Date.now(),
   parallelism = 4,
 } = {}) {
+  if (scanInFlight) return { alreadyRunning: true };
+  scanInFlight = true;
+  try {
+    return await runCapacityScanLocked({ getSettingsDep, updateSettingsDep, getConnectionsDep, getInflightDep, refreshDep, probeFn, now, parallelism });
+  } finally {
+    scanInFlight = false;
+  }
+}
+
+async function runCapacityScanLocked({
+  getSettingsDep,
+  updateSettingsDep,
+  getConnectionsDep,
+  getInflightDep,
+  refreshDep,
+  probeFn,
+  now,
+  parallelism,
+}) {
   const settings = await getSettingsDep();
   const state = settings?.capacityScan && typeof settings.capacityScan === "object" ? settings.capacityScan : {};
   if (state.running) return { ...(state.lastResult || {}), alreadyRunning: true };
@@ -97,7 +122,7 @@ export async function runCapacityScan({
 
   const connections = (await getConnectionsDep({})).filter(isActiveConnection);
   const tasks = [];
-  for (const connection of connections) {
+  for (let connection of connections) {
     const provider = connection.provider;
     const models = resolveDiagnosticModels(connection, settings?.diagnosticModels);
     if (!models.length) { skipped += 1; tally(provider, "no diagnostic models"); continue; }
@@ -107,11 +132,14 @@ export async function runCapacityScan({
     if (getInflightDep(connection.id) > 0) {
       skipped += 1; tally(provider, "busy (inflight > 0)"); continue;
     }
-    // Credential prep: the exact refresh the live chat path runs. A failed
-    // refresh marks the whole connection unknown (auth) — its models are not
-    // probed and any previous detected value stands.
+    // Credential prep: the exact refresh the live chat path runs. It RETURNS
+    // the refreshed creds (and persists them) — the probe must use the
+    // returned object, or an expired OAuth token is refreshed and then
+    // probed with the stale copy (401 every day). A failed refresh marks the
+    // whole connection unknown (auth) — its models are not probed and any
+    // previous detected value stands.
     try {
-      await refreshDep(provider, connection);
+      connection = await refreshDep(provider, connection);
     } catch {
       unknown += models.length;
       tally(provider, "auth");
@@ -160,9 +188,17 @@ export async function runCapacityScan({
       return { provider, reason, count };
     }),
   };
+  // The final write must not resurrect the start-of-scan snapshot: an
+  // operator change made while the scan ran (enabled off, intervalHours
+  // edited) lives in a FRESH settings read, and this write spreads that.
+  let freshState = state;
+  try {
+    const fresh = await getSettingsDep();
+    if (fresh?.capacityScan && typeof fresh.capacityScan === "object") freshState = fresh.capacityScan;
+  } catch { /* a failed re-read falls back to the start snapshot */ }
   await updateSettingsDep({
     detectedBudgets,
-    capacityScan: { ...state, running: false, lastRunAt: new Date(finishedAt).toISOString(), lastResult, nextRunAt: new Date(finishedAt + intervalHours * HOUR_MS).toISOString() },
+    capacityScan: { ...freshState, running: false, lastRunAt: new Date(finishedAt).toISOString(), lastResult, nextRunAt: new Date(finishedAt + intervalHours * HOUR_MS).toISOString() },
   });
   return lastResult;
 }

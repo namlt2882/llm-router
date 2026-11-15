@@ -23,7 +23,12 @@ vi.mock("@/lib/localDb", () => ({
 vi.mock("@/sse/services/tokenRefresh.js", () => ({ checkAndRefreshToken: async (_p, c) => c }));
 vi.mock("../../src/lib/fork/capacity/probe.js", () => ({
   probeConnectionModel: async () => {
-    if (probeState.slow) return new Promise(() => {}); // never settles: scan stays running
+    if (probeState.slow) {
+      // Hold the scan open (running stays true) until the test releases it —
+      // a scan that never finishes also holds the in-process scan mutex, so
+      // the test MUST release before the next one runs.
+      await new Promise((resolve) => { probeState.release = resolve; });
+    }
     return { status: "ok", budget: 4, requests: 1 };
   },
 }));
@@ -115,6 +120,13 @@ describe("/api/fork/capacity-scan", () => {
     const again = await POST(req("POST"));
     expect(again.status).toBe(409);
     expect(await again.json()).toEqual({ started: false, running: true });
+
+    // Release the held probe and let the zombie scan finish — it holds the
+    // in-process scan mutex, which the next test needs free.
+    probeState.slow = false;
+    probeState.release?.();
+    for (let i = 0; i < 50 && db.settings.capacityScan?.running; i++) await new Promise((r) => setTimeout(r, 10));
+    expect(db.settings.capacityScan?.running).toBe(false);
   });
 
   it("POST with nothing configured still starts and finishes cleanly", async () => {
