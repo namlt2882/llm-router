@@ -116,6 +116,10 @@ export async function handleChat(request, clientRawRequest = null) {
     const comboStrategies = settings.comboStrategies || {};
     const comboSpecificStrategy = comboStrategies[modelStr]?.fallbackStrategy;
     const comboStrategy = comboSpecificStrategy || settings.comboStrategy || "fallback";
+    // Fork patch #19: the combo's fanout config rides raw to account selection
+    // (auth.js parses it). Nested combos re-derive it from their OWN name, so
+    // the innermost combo's config wins for its legs.
+    const fanoutCfg = (comboStrategies[modelStr] || {}).fanout || null;
     const augmentedModels = await filterAdapterModels(keyAccess, augmentModelsWithCapacityAdapter(comboModels, requiredCapabilities, settings), comboModels);
     const adapterAdded = augmentedModels.filter((m) => !comboModels.includes(m));
 
@@ -130,7 +134,7 @@ export async function handleChat(request, clientRawRequest = null) {
             const { tools, tool_choice, ...cleanBody } = clientRawRequest.body || {};
             cleanRawReq = { ...clientRawRequest, body: cleanBody };
           }
-          return handleSingleModelChat(b, m, cleanRawReq, request, apiKey, null, sessionId);
+          return handleSingleModelChat(b, m, cleanRawReq, request, apiKey, null, sessionId, fanoutCfg);
         },
         log,
         comboName: modelStr,
@@ -146,7 +150,7 @@ export async function handleChat(request, clientRawRequest = null) {
       body,
       models: augmentedModels,
       handleSingleModel: withCapacityAdapterStripping(
-        (b, m) => handleSingleModelChat(b, m, clientRawRequest, request, apiKey, null, sessionId),
+        (b, m) => handleSingleModelChat(b, m, clientRawRequest, request, apiKey, null, sessionId, fanoutCfg),
         adapterAdded
       ),
       log,
@@ -193,7 +197,7 @@ export async function handleChat(request, clientRawRequest = null) {
 /**
  * Handle single model chat request
  */
-async function handleSingleModelChat(body, modelStr, clientRawRequest = null, request = null, apiKey = null, requestedModel = null, sessionId = null) {
+async function handleSingleModelChat(body, modelStr, clientRawRequest = null, request = null, apiKey = null, requestedModel = null, sessionId = null, fanoutCfg = null) {
   const modelInfo = await getModelInfo(modelStr);
 
   // If provider is null, this might be a combo name - check and handle
@@ -205,6 +209,9 @@ async function handleSingleModelChat(body, modelStr, clientRawRequest = null, re
       const comboStrategies = chatSettings.comboStrategies || {};
       const comboSpecificStrategy = comboStrategies[modelStr]?.fallbackStrategy;
       const comboStrategy = comboSpecificStrategy || chatSettings.comboStrategy || "fallback";
+      // Innermost combo wins: a member that is itself a combo uses ITS OWN
+      // fanout config, never the one inherited from the outer combo.
+      const nestedFanoutCfg = (comboStrategies[modelStr] || {}).fanout || null;
       const requiredCapabilities = detectRequiredCapabilities(body);
       // Nested combo (a combo member that is itself a combo): the access decision
       // was made on the outer target; only drop adapter models the key may not call.
@@ -223,7 +230,7 @@ async function handleSingleModelChat(body, modelStr, clientRawRequest = null, re
               const { tools, tool_choice, ...cleanBody } = clientRawRequest.body || {};
               cleanRawReq = { ...clientRawRequest, body: cleanBody };
             }
-            return handleSingleModelChat(b, m, cleanRawReq, request, apiKey, null, sessionId);
+            return handleSingleModelChat(b, m, cleanRawReq, request, apiKey, null, sessionId, nestedFanoutCfg);
           },
           log,
           comboName: modelStr,
@@ -241,7 +248,7 @@ async function handleSingleModelChat(body, modelStr, clientRawRequest = null, re
         body,
         models: augmentedModels,
         handleSingleModel: withCapacityAdapterStripping(
-          (b, m) => handleSingleModelChat(b, m, clientRawRequest, request, apiKey, null, sessionId),
+          (b, m) => handleSingleModelChat(b, m, clientRawRequest, request, apiKey, null, sessionId, nestedFanoutCfg),
           adapterAdded
         ),
         log,
@@ -287,6 +294,8 @@ async function handleSingleModelChat(body, modelStr, clientRawRequest = null, re
       // Fork patch #18: the caller's tier, and how long a capped request may wait (read in auth.js from settings).
       priority: parsePriority(request.headers),
       wait: true,
+      // Fork patch #19: raw combo fanout config; parsed in auth.js only.
+      fanout: fanoutCfg,
     });
 
     // All accounts unavailable
