@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 // In-memory settings/connections — scan.js resolves the same "@/lib/localDb"
 // module, so its persisted running flag is visible to GET through this map.
 const db = vi.hoisted(() => ({ settings: {}, connections: [], failUpdates: false }));
-const probeState = vi.hoisted(() => ({ slow: false }));
+const probeState = vi.hoisted(() => ({ slow: false, calls: [] }));
 
 vi.mock("next/server", () => ({
   NextResponse: {
@@ -22,7 +22,8 @@ vi.mock("@/lib/localDb", () => ({
 }));
 vi.mock("@/sse/services/tokenRefresh.js", () => ({ checkAndRefreshToken: async (_p, c) => c }));
 vi.mock("../../src/lib/fork/capacity/probe.js", () => ({
-  probeConnectionModel: async () => {
+  probeConnectionModel: async (input) => {
+    probeState.calls.push(input);
     if (probeState.slow) {
       // Hold the scan open (running stays true) until the test releases it —
       // a scan that never finishes also holds the in-process scan mutex, so
@@ -43,6 +44,7 @@ const req = (method, { token = "secret-token", query = "" } = {}) =>
 
 beforeEach(() => {
   probeState.slow = false;
+  probeState.calls = [];
   db.failUpdates = false;
   db.settings = {};
   db.connections = [];
@@ -155,5 +157,19 @@ describe("/api/fork/capacity-scan minor 9", () => {
     } finally {
       warn.mockRestore();
     }
+  });
+});
+
+// Review minor 3 follow-up (found live: the scan with settings maxLevel 4
+// still ran the full 32 ramp — the DEFAULT probeFn dropped the field). The
+// default path must forward the knob to probeConnectionModel.
+describe("/api/fork/capacity-scan knob forwarding", () => {
+  it("the default probeFn forwards settings maxLevel to the probe", async () => {
+    db.settings = { capacityScan: { enabled: true, maxLevel: 4 }, diagnosticModels: { "conn-1": ["m1"] } };
+    db.connections = [{ id: "conn-1", provider: "glm", isActive: true }];
+    const started = await POST(req("POST"));
+    expect(await started.json()).toEqual({ started: true });
+    for (let i = 0; i < 50 && db.settings.capacityScan?.running; i++) await new Promise((r) => setTimeout(r, 10));
+    expect(probeState.calls[0]?.maxLevel).toBe(4);
   });
 });
