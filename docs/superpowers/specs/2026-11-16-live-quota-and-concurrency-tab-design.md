@@ -195,6 +195,7 @@ CREATE TABLE IF NOT EXISTS concurrencySamples (
   totalBudget text NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_concurrency_ts ON concurrencySamples(ts);
+-- +goose StatementBegin
 DO $$ BEGIN
   IF EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'timescaledb') THEN
     PERFORM create_hypertable('concurrencySamples', 'ts',
@@ -205,6 +206,7 @@ DO $$ BEGIN
       if_not_exists => TRUE);
   END IF;
 END $$;
+-- +goose StatementEnd
 -- +goose Down
 SELECT remove_retention_policy('concurrencySamples', if_exists => TRUE);
 DROP TABLE IF EXISTS concurrencySamples;
@@ -213,7 +215,10 @@ DROP TABLE IF EXISTS concurrencySamples;
 The `DO $$` guard is deliberate: on **vanilla Postgres** (including the
 throwaway containers `verify-migrations.sh` spins up on the stock pg15
 image) the migration still succeeds and leaves a plain table — Timescale is
-an optimization, never a boot dependency. Where the extension exists
+an optimization, never a boot dependency. The `-- +goose StatementBegin`
+/ `-- +goose StatementEnd` markers are equally deliberate (added during
+execution after a throwaway-pg15 reproduction): goose splits statements on
+`;` and would otherwise cut the DO block at its first body semicolon. Where the extension exists
 (the new `llm-db` container, after `CREATE EXTENSION` in the ensure script)
 the table becomes a hypertable chunked by 1 day with a 60-day retention
 policy. `to_timestamp` is required because `ts` is `text` under the mirror
