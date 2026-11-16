@@ -21,6 +21,10 @@ import * as log from "../utils/logger.js";
 // Fork patch #19: combo-scoped fanout — per-account budgets + headroom ranking.
 import { parseFanoutCtx, effectiveFanoutBudget, rankFanout } from "./fanoutBudget.js";
 
+// The keyless lane has no connection row: its account id is the provider id
+// (or the legacy "noauth"), and there is nothing to lock or clear.
+const isKeylessLaneId = (id) => id === "noauth" || FREE_PROVIDERS[id]?.noAuth === true;
+
 // Mutex to prevent race conditions during account selection
 let selectionMutex = Promise.resolve();
 
@@ -100,9 +104,24 @@ async function selectProviderCredentials(provider, excludeConnectionIds = null, 
         const poolIds = allPools.filter(p => p.proxyUrl).map(p => p.id);
         pickedId = pickProxyPoolId(poolIds, strategy, providerId);
       }
+      // Keyless lane: no connection row, so the PROVIDER ID is the account id —
+      // the capacity scan stores its measurement under detectedBudgets[providerId]
+      // and the same per-key chain (manual → percent×detected → global) caps it.
+      const keylessLimit = effectiveFanoutBudget(fanoutCtx, providerId, accountInflightLimit(), settings.detectedBudgets || null, model);
+      if (!tryAcquireAccountSlot(providerId, keylessLimit)) {
+        log.warn("AUTH", `${provider} | keyless lane at its in-flight cap (${keylessLimit})`);
+        return {
+          allRateLimited: true,
+          retryAfter: new Date(Date.now() + 2000).toISOString(),
+          retryAfterHuman: "2s",
+          lastError: "All accounts at max in-flight",
+          lastErrorCode: "account_busy",
+        };
+      }
       const resolvedProxy = await resolveConnectionProxyConfig({ proxyPoolId: pickedId || "" });
       return {
         id: "noauth",
+        connectionId: providerId,
         connectionName: "Public",
         isActive: true,
         accessToken: "public",
@@ -387,7 +406,7 @@ async function selectProviderCredentials(provider, excludeConnectionIds = null, 
  * @returns {{ shouldFallback: boolean, cooldownMs: number }}
  */
 export async function markAccountUnavailable(connectionId, status, errorText, provider = null, model = null, resetsAtMs = null) {
-  if (!connectionId || connectionId === "noauth") return { shouldFallback: false, cooldownMs: 0 };
+  if (!connectionId || isKeylessLaneId(connectionId)) return { shouldFallback: false, cooldownMs: 0 };
   const connections = await getProviderConnections({ provider });
   const conn = connections.find(c => c.id === connectionId);
   const backoffLevel = conn?.backoffLevel || 0;
@@ -446,7 +465,7 @@ export async function markAccountUnavailable(connectionId, status, errorText, pr
  * @param {string|null} model - model that succeeded
  */
 export async function clearAccountError(connectionId, currentConnection, model = null) {
-  if (!connectionId || connectionId === "noauth") return;
+  if (!connectionId || isKeylessLaneId(connectionId)) return;
   const conn = currentConnection._connection || currentConnection;
   const now = Date.now();
   const allLockKeys = Object.keys(conn).filter(k => k.startsWith("modelLock_"));

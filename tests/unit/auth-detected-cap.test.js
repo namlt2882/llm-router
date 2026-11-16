@@ -14,7 +14,7 @@ vi.mock("@/lib/localDb", () => ({
 vi.mock("@/lib/network/connectionProxy", () => ({ resolveConnectionProxyConfig: async () => ({}), pickProxyPoolId: () => null }));
 vi.mock("open-sse/services/accountFallback.js", () => ({
   formatRetryAfter: (s) => s,
-  checkFallbackError: () => ({ shouldFallback: false, cooldownMs: 0, backoffLevel: 0 }),
+  checkFallbackError: () => (h.shouldFallback ? { shouldFallback: true, cooldownMs: 1000, backoffLevel: 1 } : { shouldFallback: false, cooldownMs: 0, backoffLevel: 0 }),
   isModelLockActive: () => false,
   buildModelLockUpdate: () => ({}),
   getEarliestModelLockUntil: () => null,
@@ -37,7 +37,7 @@ vi.mock("../../src/sse/services/sessionPin.js", () => ({
   pinSession: () => {},
 }));
 
-const { getProviderCredentials } = await import("../../src/sse/services/auth.js");
+const { getProviderCredentials, markAccountUnavailable, clearAccountError } = await import("../../src/sse/services/auth.js");
 const conn = (id, over = {}) => ({ id, provider: "openai", authType: "apiKey", apiKey: "k", isActive: true, ...over });
 
 beforeEach(() => {
@@ -46,6 +46,7 @@ beforeEach(() => {
   h.pins = {};
   h.inflight = {};
   h.acquireOk = true;
+  h.shouldFallback = false;
   h.onWait = null;
   logger.warn.mockClear();
   h.settings = { fallbackStrategy: "spread" };
@@ -104,5 +105,47 @@ describe("fanout chain layers percent over detected budgets", () => {
     // conn-1 effective 16 (20×0.8), ratio 0.75 free; conn-2 global 4, ratio 0.5 → conn-1 wins
     const pick = await getProviderCredentials("openai", null, "m", { fanout: { enabled: true, percent: 80 } });
     expect(pick?.connectionId).toBe("conn-1");
+  });
+});
+
+// Keyless (noAuth) providers have no connection rows, so the capacity scan
+// measures them under detectedBudgets[providerId]. The virtual lane's
+// connection id IS the provider id: the existing per-key chain resolves it, and
+// the lane now takes a real in-flight slot instead of running uncapped.
+describe("keyless provider lane (noauth) admission", () => {
+  it("takes a slot keyed by the provider id, capped at the detected budget", async () => {
+    h.settings.detectedBudgets = { opencode: { "m-free": { budget: 3 } } };
+    const pick = await getProviderCredentials("opencode", null, "m-free");
+    expect(pick.connectionId).toBe("opencode");
+    expect(h.acquired).toEqual([["opencode", 3]]);
+  });
+
+  it("an unmeasured model keeps the global limit", async () => {
+    h.settings.detectedBudgets = { opencode: { "m-free": { budget: 3 } } };
+    await getProviderCredentials("opencode", null, "other-model");
+    expect(h.acquired).toEqual([["opencode", 4]]);
+  });
+
+  it("at its cap the lane answers the retryable account_busy, like any account", async () => {
+    h.settings.detectedBudgets = { opencode: { "m-free": { budget: 3 } } };
+    h.acquireOk = false;
+    const pick = await getProviderCredentials("opencode", null, "m-free");
+    expect(pick.lastErrorCode).toBe("account_busy");
+    expect(pick.allRateLimited).toBe(true);
+  });
+
+  it("a fanout combo's percent margin scales the detected budget", async () => {
+    h.settings.detectedBudgets = { opencode: { "m-free": { budget: 4 } } };
+    await getProviderCredentials("opencode", null, "m-free", { fanout: { enabled: true, budgets: {}, percent: 50 } });
+    expect(h.acquired).toEqual([["opencode", 2]]);
+  });
+
+  it("a failure never locks or falls back off the keyless lane (no connection row to lock)", async () => {
+    h.shouldFallback = true; // the classifier WOULD fall back for a real account
+    expect(await markAccountUnavailable("opencode", 429, "slow down", "opencode", "m-free"))
+      .toEqual({ shouldFallback: false, cooldownMs: 0 });
+    expect(h.update).not.toHaveBeenCalled();
+    await clearAccountError("opencode", { id: "opencode" }, "m-free");
+    expect(h.update).not.toHaveBeenCalled();
   });
 });
