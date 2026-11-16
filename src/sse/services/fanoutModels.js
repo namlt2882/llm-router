@@ -16,7 +16,9 @@
  * - Prompt-cache affinity: a session keeps its last served model while that
  *   lane has room, and migrates once when the lane is full or locked.
  * - Never drops a model: a full lane, or one with no usable account, sorts to
- *   the back and stays reachable as fallback. Ties keep combo order.
+ *   the back and stays reachable as fallback. Lanes that tie keep combo order.
+ * - Models sharing one lane (e.g. the keyless opencode models) rotate: the least
+ *   recently picked goes first, so new sessions spread over all of them.
  */
 
 import { getProviderConnections, getSettings } from "@/lib/localDb";
@@ -31,6 +33,16 @@ import { effectiveFanoutBudget, keylessLaneLimit, parseFanoutCtx } from "./fanou
 // only stops a lost release from biasing a lane forever.
 const RESERVATION_TTL_MS = 60_000;
 const reservations = new Set();
+
+// comboName -> (model -> pick sequence); drives rotation among same-lane models.
+const picks = new Map();
+let pickSeq = 0;
+
+const lastPick = (comboName, model) => picks.get(comboName)?.get(model) || 0;
+const recordPick = (comboName, model) => {
+  if (!picks.has(comboName)) picks.set(comboName, new Map());
+  picks.get(comboName).set(model, ++pickSeq);
+};
 
 const pendingOn = (lane) => {
   const now = Date.now();
@@ -101,7 +113,13 @@ export async function orderModelsByHeadroom({ models, comboName, sessionId, fano
     return { model, index, ...(await laneFor(model, info, ctx, settings, connectionsFor)) };
   }));
 
-  const ordered = [...rows].sort((a, b) => b.ratio - a.ratio || a.index - b.index);
+  const laneFirst = new Map();
+  for (const r of rows) if (!laneFirst.has(r.lane) || r.index < laneFirst.get(r.lane)) laneFirst.set(r.lane, r.index);
+  const ordered = [...rows].sort((a, b) =>
+    b.ratio - a.ratio
+    || laneFirst.get(a.lane) - laneFirst.get(b.lane)
+    || lastPick(comboName, a.model) - lastPick(comboName, b.model)
+    || a.index - b.index);
 
   const stickyModel = sessionId ? getStickyComboModel(comboName, sessionId, models) : null;
   if (stickyModel) {
@@ -114,6 +132,7 @@ export async function orderModelsByHeadroom({ models, comboName, sessionId, fano
 
   log.info("FANOUT", `${comboName} order: ${ordered.map((r) => `${r.model}(${r.ratio.toFixed(2)})`).join(" > ")}`);
   const first = ordered[0];
+  recordPick(comboName, first.model);
   const token = { lane: first.lane, expires: Date.now() + RESERVATION_TTL_MS };
   if (first.ratio >= 0) reservations.add(token);
   return { models: ordered.map((r) => r.model), release: () => { reservations.delete(token); } };
@@ -126,4 +145,6 @@ export function rememberServedModel(comboName, sessionId, model) {
 
 export function __resetFanoutModels() {
   reservations.clear();
+  picks.clear();
+  pickSeq = 0;
 }

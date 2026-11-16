@@ -114,4 +114,40 @@ describe("fanout model ordering", () => {
     const { models } = await order(["glm/a", "sub"], { getModelInfo });
     expect(models[0]).toBe("sub");
   });
+
+  it("rotates models that share one lane: least recently picked first on a tie", async () => {
+    const firsts = [];
+    for (let i = 0; i < 4; i++) {
+      const r = await order(["opencode/x", "opencode/y", "opencode/z"]);
+      firsts.push(r.models[0]);
+      r.release();
+    }
+    expect(firsts).toEqual(["opencode/x", "opencode/y", "opencode/z", "opencode/x"]);
+  });
+
+  it("rotation never outranks headroom: a fuller lane still sorts behind", async () => {
+    fill("g1", 3);
+    const firsts = [];
+    for (let i = 0; i < 3; i++) {
+      const r = await order(["glm/a", "openai/b"]);
+      firsts.push(r.models[0]);
+      r.release();
+    }
+    expect(firsts).toEqual(["openai/b", "openai/b", "openai/b"]);
+  });
+
+  it("a session's served model stays first even when it is not the least recently picked", async () => {
+    const warm = await order(["opencode/x", "opencode/y", "opencode/z"]);
+    warm.release();
+    setStickyComboModel("wb", "s1", "opencode/x");
+    const { models } = await order(["opencode/x", "opencode/y", "opencode/z"], { sessionId: "s1" });
+    expect(models[0]).toBe("opencode/x");
+  });
+
+  it("rotation is tracked per combo", async () => {
+    const a = await order(["opencode/x", "opencode/y"], { comboName: "other" });
+    a.release();
+    const { models } = await order(["opencode/x", "opencode/y"]);
+    expect(models[0]).toBe("opencode/x");
+  });
 });
