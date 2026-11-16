@@ -34,6 +34,18 @@ const GENERIC_THROTTLE = /rate limit|too many requests|overloaded|resource exhau
  * @param {{ provider?: string|null, status?: number|null, bodyText?: string|null }} input
  * @returns {"throttle"|"quota"|"auth"|"balance"|"config"|"network"}
  */
+/**
+ * Whether an error body matches the quota dialects above (GoUsageLimitError,
+ * "usage limit reached (monthly)"). The live-traffic collapse path reuses the
+ * scan's hints through this export — a second copy of the regex would drift
+ * exactly where no schema test can look.
+ * @param {string|undefined} bodyText
+ * @returns {boolean}
+ */
+export function matchesQuotaHints(bodyText) {
+  return typeof bodyText === "string" && QUOTA_HINTS.test(bodyText);
+}
+
 export function classifyProbeError({ provider, status, bodyText } = {}) {
   const body = typeof bodyText === "string" ? bodyText : "";
   const lower = body.toLowerCase();
