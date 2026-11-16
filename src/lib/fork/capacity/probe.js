@@ -12,6 +12,7 @@
  * checkAndRefreshToken and skips connections it cannot dispatch for.
  */
 import registry from "open-sse/providers/registry/index.js";
+import { getExecutor } from "open-sse/executors/index.js";
 import { classifyProbeError } from "./classifyError.js";
 
 /**
@@ -128,4 +129,65 @@ export function makeDefaultDispatch({ fetchImpl = fetch, dispatcher = null, prob
       return { ok: false, status: null, bodyText: String(e?.message || e) };
     }
   };
+}
+
+const drainResponse = async (response) => {
+  if (typeof response?.text === "function") return response.text();
+  if (response?.body && typeof response.body.getReader === "function") {
+    const reader = response.body.getReader();
+    let text = "";
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (value) text += typeof value === "string" ? value : new TextDecoder().decode(value);
+    }
+    return text;
+  }
+  return "";
+};
+
+/**
+ * Executor-backed dispatch for providers whose live lane the generic openai
+ * POST can never reach (opencode free: TLS-ClientHello gate + forced
+ * streaming). Drives the provider's REAL executor — its transformRequest
+ * (stream forcing, fingerprint tools), its session headers, and its
+ * impersonating fetch — so the probe measures exactly the lane live traffic
+ * uses. Credentials stay empty: keyless providers mint per-request state
+ * themselves. A provider with no executor is unsupported for this path.
+ * @param {{ probeTimeoutMs?: number }} [options]
+ */
+export function makeExecutorDispatch({ probeTimeoutMs = 15000 } = {}) {
+  return async function dispatch({ provider, model }) {
+    const executor = getExecutor(provider);
+    if (!executor) return { ok: false, unsupported: true };
+    try {
+      const { response } = await executor.execute({
+        model,
+        body: { model, messages: [{ role: "user", content: "hi" }], max_tokens: 8, stream: true },
+        stream: true,
+        credentials: {},
+        signal: AbortSignal.timeout(probeTimeoutMs),
+      });
+      const bodyText = await drainResponse(response);
+      if (response?.ok) return { ok: true };
+      return { ok: false, status: response?.status ?? null, bodyText };
+    } catch (e) {
+      return { ok: false, status: null, bodyText: String(e?.message || e) };
+    }
+  };
+}
+
+/**
+ * Pick the dispatch a provider is actually probeable through: an openai-format
+ * transport goes through the generic fetch path (Bearer, non-streaming —
+ * cheapest); every other provider goes through its executor, which reports
+ * unsupported when none exists. Registered in the scan's default probeFn so
+ * the DEFAULT wiring reaches executor-only providers too.
+ * @param {string} provider
+ * @returns {(task: {provider: string, connection: object, model: string}) => Promise<{ok: true} | {ok: false, status?: number|null, bodyText?: string, unsupported?: true}>}
+ */
+export function dispatchFor(provider) {
+  const entry = Array.isArray(registry) ? registry.find((p) => p?.id === provider) : null;
+  if (entry?.transports?.some((t) => t?.format === "openai")) return makeDefaultDispatch();
+  return makeExecutorDispatch();
 }

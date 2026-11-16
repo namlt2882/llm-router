@@ -12,6 +12,10 @@ vi.mock("@/sse/services/tokenRefresh.js", () => ({ checkAndRefreshToken: async (
 // probe.js resolves this at import; the scan tests inject probeFn so the
 // registry itself is never consulted.
 vi.mock("open-sse/providers/registry/index.js", () => ({ default: [] }));
+vi.mock("open-sse/executors/index.js", () => ({
+  getExecutor: () => null,
+  hasSpecializedExecutor: () => false,
+}));
 
 const { resolveDiagnosticModels, isDue, runCapacityScan, ensureCapacityScheduler, resetCapacityScheduler }
   = await import("../../src/lib/fork/capacity/scan.js");

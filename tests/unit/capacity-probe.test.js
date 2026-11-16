@@ -193,3 +193,66 @@ describe("makeDefaultDispatch", () => {
     expect(fetchImpl.mock.calls[0][1].dispatcher).toBe(dispatcher);
   });
 });
+
+// Keyless providers (opencode free) gate on TLS fingerprint + stream-forced
+// bodies — the generic openai POST can never reach them. makeExecutorDispatch
+// drives the provider's REAL executor (its transformRequest/buildHeaders/
+// impersonating fetch) so the probe measures the lane live traffic uses.
+const executorState = vi.hoisted(() => ({ calls: [], respond: null }));
+vi.mock("open-sse/executors/index.js", () => ({
+  getExecutor: (provider) => (provider === "opencode" ? {
+    execute: async ({ model, body, stream, credentials, signal }) => {
+      executorState.calls.push({ model, stream, hasBody: !!body, hasSignal: !!signal, bareCreds: !credentials || Object.keys(credentials).length === 0 });
+      const respond = executorState.respond;
+      if (respond) return respond();
+      const streamBody = { getReader: () => ({ read: async () => ({ done: true }) }) };
+      return { response: { ok: true, status: 200, body: streamBody } };
+    },
+  } : null),
+  hasSpecializedExecutor: (provider) => provider === "opencode",
+}));
+
+describe("makeExecutorDispatch", () => {
+  beforeEach(() => { executorState.respond = null; });
+
+  it("runs one streamed completion through the provider's real executor", async () => {
+    const { makeExecutorDispatch } = await import("../../src/lib/fork/capacity/probe.js");
+    const dispatch = makeExecutorDispatch();
+    const result = await dispatch({ provider: "opencode", connection: { id: "opencode" }, model: "mimo-v2.6-flash-free" });
+    expect(result).toEqual({ ok: true });
+    expect(executorState.calls[0].model).toBe("mimo-v2.6-flash-free");
+    expect(executorState.calls[0].stream).toBe(true); // free lane rejects non-streaming
+    expect(executorState.calls[0].hasBody).toBe(true);
+    expect(executorState.calls[0].hasSignal).toBe(true);
+    expect(executorState.calls[0].bareCreds).toBe(true); // keyless — no credentials to pass
+  });
+
+  it("surfaces executor-level failures as classified dispatch results", async () => {
+    const { makeExecutorDispatch } = await import("../../src/lib/fork/capacity/probe.js");
+    executorState.respond = () => ({
+      response: { ok: false, status: 429, body: { getReader: () => ({ read: async () => ({ done: true }) }) }, text: async () => '{"type":"error","error":{"type":"FreeUsageLimitError"}}' },
+    });
+    const result = await makeExecutorDispatch()({ provider: "opencode", connection: { id: "opencode" }, model: "m" });
+    expect(result.ok).toBe(false);
+    expect(result.status).toBe(429);
+    expect(result.bodyText).toContain("FreeUsageLimitError");
+  });
+
+  it("a provider without an executor is unsupported for executor probing", async () => {
+    const { makeExecutorDispatch } = await import("../../src/lib/fork/capacity/probe.js");
+    const result = await makeExecutorDispatch()({ provider: "unknown-prov", connection: { id: "x" }, model: "m" });
+    expect(result).toEqual({ ok: false, unsupported: true });
+  });
+
+  it("dispatchFor picks the executor for executor-only providers and the transport path otherwise", async () => {
+    const { dispatchFor } = await import("../../src/lib/fork/capacity/probe.js");
+    const viaExecutor = await dispatchFor("opencode")({ provider: "opencode", connection: { id: "opencode" }, model: "m" });
+    expect(viaExecutor).toEqual({ ok: true });
+    const nogpt = await dispatchFor("nogpt")({ provider: "nogpt", connection: {}, model: "m" });
+    // nogpt has no openai transport and no executor → generic dispatch → unsupported
+    expect(nogpt.unsupported).toBe(true);
+    const glm = dispatchFor("glm");
+    // glm declares an openai transport → the default fetch-based dispatch (not executor)
+    expect(await glm({ provider: "glm", connection: { apiKey: "k" }, model: "m" })).toBeDefined();
+  });
+});

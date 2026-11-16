@@ -22,6 +22,7 @@ vi.mock("@/lib/localDb", () => ({
 }));
 vi.mock("@/sse/services/tokenRefresh.js", () => ({ checkAndRefreshToken: async (_p, c) => c }));
 vi.mock("../../src/lib/fork/capacity/probe.js", () => ({
+  dispatchFor: () => async () => ({ ok: true }),
   probeConnectionModel: async (input) => {
     probeState.calls.push(input);
     if (probeState.slow) {

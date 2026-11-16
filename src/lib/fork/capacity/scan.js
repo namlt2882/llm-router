@@ -16,7 +16,7 @@
 import { checkAndRefreshToken } from "@/sse/services/tokenRefresh.js";
 import { getSettings, updateSettings, getProviderConnections } from "@/lib/localDb";
 import { getInflightCount } from "@/sse/services/accountInflight.js";
-import { probeConnectionModel } from "./probe.js";
+import { probeConnectionModel, dispatchFor } from "./probe.js";
 
 const STALE_RUNNING_MS = 30 * 60 * 1000;
 
@@ -77,7 +77,8 @@ export async function runCapacityScan({
   getProviderConnections: getConnectionsDep = getProviderConnections,
   getInflightCount: getInflightDep = getInflightCount,
   checkAndRefreshToken: refreshDep = checkAndRefreshToken,
-  probeFn = ({ provider, connection, model, maxLevel }) => probeConnectionModel({ provider, connection, model, maxLevel }),
+  probeFn = ({ provider, connection, model, maxLevel }) =>
+    probeConnectionModel({ provider, connection, model, maxLevel, dispatch: dispatchFor(provider) }),
   now = () => Date.now(),
   parallelism = 4,
   provider = null,
