@@ -11,6 +11,9 @@ const unauthorized = () => NextResponse.json({ error: "Unauthorized" }, { status
 
 const isActiveConnection = (c) => c.isActive === true || c.isactive === "1";
 
+/** Depth guard for a combo that references itself (or a cycle of combos). */
+const MAX_NESTED_DEPTH = 8;
+
 /**
  * Capacity of a combo's leaf members: for every active connection of each
  * member's provider, the fanout budget that request would run at (manual
@@ -18,46 +21,78 @@ const isActiveConnection = (c) => c.isActive === true || c.isactive === "1";
  * ACCOUNT (connection id, or provider id for a keyless lane), not per model,
  * so every account counts once, at the highest budget any member gives it —
  * summing per member would count one account once per model.
- * Nested combos are counted, not summed
- * (their capacity is the max of their legs, and probing inside a combo is v2).
+ *
+ * A nested combo (a member with no `/` that names another combo) is expanded
+ * into its own leaves and counted like any other member: its accounts are real
+ * accounts the outer combo can spread over, so `wavebot = [glm, opencode-go]`
+ * reports glm + opencode-go's models, not just glm.
+ *
+ * The MARGIN is always the displayed combo's own (`ctx`), never the nested
+ * combo's — a nested combo contributes its RAW capacity. Ruling 2026-11-16
+ * (Steve): `opencode-go = 30 @ 50%` inside `wavebot = 10 + 30 @ 80%` is
+ * `(10 + 30) × 80% = 32`, NOT `(10 + 30×50%) × 80% = 20`. A nested margin
+ * never compounds into the outer one, and a nested combo's manual budgets are
+ * likewise not the outer combo's configuration.
  */
 async function comboSummary(name, settings) {
-  const combo = await getComboByName(name);
-  if (!combo?.models?.length) return null;
   const globalLimit = accountInflightLimit();
   const detected = settings?.detectedBudgets && typeof settings.detectedBudgets === "object" ? settings.detectedBudgets : {};
-  const entry = (settings?.comboStrategies || {})[name] || {};
-  const ctx = fanoutCtxForEntry(entry);
   const connections = (await getProviderConnections({})).filter(isActiveConnection);
-
   const lanes = new Map();
   const lane = (id, limit) => lanes.set(id, Math.max(lanes.get(id) || 0, limit));
+  const seen = new Set();
   let members = 0, nested = 0;
-  for (const member of combo.models) {
-    if (!member.includes("/")) {
-      if (await getComboByName(member)) nested += 1;
-      continue;
+
+  // `ctx` is the DISPLAYED combo's strategy, threaded unchanged into every
+  // level: a nested combo is expanded for its models, not for its config.
+  // Returns whether this combo actually contributed (false for a combo that is
+  // unknown, empty or already visited — a cycle adds no accounts).
+  async function walk(comboName, ctx, depth) {
+    if (depth > MAX_NESTED_DEPTH || seen.has(comboName)) return false;
+    const combo = await getComboByName(comboName);
+    if (!combo?.models?.length) return false;
+    seen.add(comboName);
+
+    let contributed = false;
+    for (const member of combo.models) {
+      if (!member.includes("/")) {
+        if (await getComboByName(member)) {
+          if (await walk(member, ctx, depth + 1)) {
+            nested += 1;
+            contributed = true;
+          }
+        }
+        continue;
+      }
+      const idx = member.indexOf("/");
+      // Members store whatever the operator picked — usually the UI alias
+      // (`ocg/beam-free`), while a connection stores the canonical provider id
+      // (`opencode-go`). Compare canonically on BOTH sides or a measured combo
+      // reports sum 0 ("no parameters") while its models have budgets.
+      const providerId = resolveProviderId(member.slice(0, idx));
+      const model = member.slice(idx + 1);
+      members += 1;
+      let counted = 0;
+      for (const c of connections) {
+        if (resolveProviderId(c.provider) !== providerId) continue;
+        lane(c.id, effectiveFanoutBudget(ctx, c.id, globalLimit, detected, model));
+        counted += 1;
+      }
+      // A keyless provider with no connections is served by ONE shared lane
+      // whose account id is the provider id (auth.js) — count that lane.
+      if (!counted && FREE_PROVIDERS[providerId]?.noAuth) {
+        lane(providerId, keylessLaneLimit(effectiveFanoutBudget(ctx, providerId, globalLimit, detected, model), settings));
+      }
+      contributed = true;
     }
-    const idx = member.indexOf("/");
-    // Members store whatever the operator picked — usually the UI alias
-    // (`ocg/beam-free`), while a connection stores the canonical provider id
-    // (`opencode-go`). Compare canonically on BOTH sides or a measured combo
-    // reports sum 0 ("no parameters") while its models have budgets.
-    const providerId = resolveProviderId(member.slice(0, idx));
-    const model = member.slice(idx + 1);
-    members += 1;
-    let counted = 0;
-    for (const c of connections) {
-      if (resolveProviderId(c.provider) !== providerId) continue;
-      lane(c.id, effectiveFanoutBudget(ctx, c.id, globalLimit, detected, model));
-      counted += 1;
-    }
-    // A keyless provider with no connections is served by ONE shared lane whose
-    // account id is the provider id (auth.js) — count that lane.
-    if (!counted && FREE_PROVIDERS[providerId]?.noAuth) {
-      lane(providerId, keylessLaneLimit(effectiveFanoutBudget(ctx, providerId, globalLimit, detected, model), settings));
-    }
+    return contributed;
   }
+
+  const root = await getComboByName(name);
+  if (!root?.models?.length) return null;
+  const entry = (settings?.comboStrategies || {})[name] || {};
+  await walk(name, fanoutCtxForEntry(entry), 0);
+
   let sum = 0;
   for (const limit of lanes.values()) sum += limit;
   return { combo: name, sum, members, ...(nested ? { nested } : {}) };

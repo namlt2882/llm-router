@@ -157,7 +157,7 @@ describe("/api/fork/capacity-scan", () => {
     expect(body.summary).toEqual({ combo: "combo-alias", sum: 8, members: 1 });
   });
 
-  it("a nested combo member is counted, not summed", async () => {
+  it("a nested combo is expanded into its leaves and counted like any other member", async () => {
     db.settings = {
       combos: {
         "combo-x": { models: ["inner-c", "glm/m"] },
@@ -167,7 +167,65 @@ describe("/api/fork/capacity-scan", () => {
     };
     db.connections = [{ id: "conn-1", provider: "glm", isActive: true }];
     const body = await (await GET(req("GET", { query: "?combo=combo-x" }))).json();
-    expect(body.summary).toEqual({ combo: "combo-x", sum: 4, members: 1, nested: 1 });
+    // both leaves share conn-1, so one lane at the global 4 — counted once
+    expect(body.summary).toEqual({ combo: "combo-x", sum: 4, members: 2, nested: 1 });
+  });
+
+  it("a nested combo contributes its raw capacity: only the displayed combo's margin applies", async () => {
+    db.settings = {
+      combos: {
+        wavebot: { models: ["glm/glm-5.3-flash", "opencode-go"] },
+        "opencode-go": { models: ["ocg/beam-free"] },
+      },
+      comboStrategies: {
+        wavebot: { fallbackStrategy: "fanout", fanout: { percent: 80 } },
+        "opencode-go": { fallbackStrategy: "fanout", fanout: { percent: 50 } },
+      },
+      detectedBudgets: {
+        "conn-glm": { "glm-5.3-flash": { budget: 10 } },
+        "conn-oc": { "beam-free": { budget: 30 } },
+      },
+    };
+    db.connections = [
+      { id: "conn-glm", provider: "glm", isActive: true },
+      { id: "conn-oc", provider: "opencode-go", isActive: true },
+    ];
+    const body = await (await GET(req("GET", { query: "?combo=wavebot" }))).json();
+    // (10 + 30) × 80% = 32 — NOT (10 + 30×50%) × 80% = 20: the inner margin
+    // never compounds into the outer one.
+    expect(body.summary).toEqual({ combo: "wavebot", sum: 32, members: 2, nested: 1 });
+  });
+
+  it("a nested combo whose manual budgets disagree still yields to the displayed combo's config", async () => {
+    db.settings = {
+      combos: {
+        outer: { models: ["inner"] },
+        inner: { models: ["glm/m"] },
+      },
+      comboStrategies: {
+        outer: { fallbackStrategy: "fanout", fanout: { budgets: { "conn-1": 9 } } },
+        inner: { fallbackStrategy: "fanout", fanout: { budgets: { "conn-1": 2 }, percent: 50 } },
+      },
+      detectedBudgets: { "conn-1": { m: { budget: 10 } } },
+    };
+    db.connections = [{ id: "conn-1", provider: "glm", isActive: true }];
+    const body = await (await GET(req("GET", { query: "?combo=outer" }))).json();
+    // the outer manual budget (9) is the one a request actually runs at
+    expect(body.summary).toEqual({ combo: "outer", sum: 9, members: 1, nested: 1 });
+  });
+
+  it("a combo that references itself terminates instead of recursing forever", async () => {
+    db.settings = {
+      combos: {
+        loop: { models: ["loop", "glm/m"] },
+        a: { models: ["b"] },
+        b: { models: ["a"] },
+      },
+      comboStrategies: { loop: { fallbackStrategy: "fanout" } },
+    };
+    db.connections = [{ id: "conn-1", provider: "glm", isActive: true }];
+    const body = await (await GET(req("GET", { query: "?combo=loop" }))).json();
+    expect(body.summary).toEqual({ combo: "loop", sum: 4, members: 1 });
   });
 
   it("POST starts a scan fire-and-forget; GET then shows running; POST again → 409", async () => {
