@@ -4,6 +4,7 @@ import { getSettings, getProviderConnections, getComboByName } from "@/lib/local
 import { accountInflightLimit } from "@/sse/services/accountInflight.js";
 import { runCapacityScan } from "@/lib/fork/capacity/scan.js";
 import { fanoutCtxForEntry, effectiveFanoutBudget } from "@/sse/services/fanoutBudget.js";
+import { resolveProviderId, FREE_PROVIDERS } from "@/shared/constants/providers.js";
 
 const NO_STORE = { "Cache-Control": "no-store" };
 const unauthorized = () => NextResponse.json({ error: "Unauthorized" }, { status: 401, headers: NO_STORE });
@@ -35,9 +36,17 @@ async function comboSummary(name, settings) {
     const provider = member.slice(0, idx);
     const model = member.slice(idx + 1);
     members += 1;
+    let counted = 0;
     for (const c of connections) {
       if (c.provider !== provider) continue;
       sum += effectiveFanoutBudget(ctx, c.id, globalLimit, detected, model);
+      counted += 1;
+    }
+    // A keyless provider with no connections is served by ONE shared lane whose
+    // account id is the provider id (auth.js) — count that lane.
+    const providerId = resolveProviderId(provider);
+    if (!counted && FREE_PROVIDERS[providerId]?.noAuth) {
+      sum += effectiveFanoutBudget(ctx, providerId, globalLimit, detected, model);
     }
   }
   return { combo: name, sum, members, ...(nested ? { nested } : {}) };

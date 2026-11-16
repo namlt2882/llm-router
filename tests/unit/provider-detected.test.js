@@ -58,4 +58,26 @@ describe("providerDetectedRows", () => {
     const detectedBudgets = { "c-deleted": { m: { budget: 1, detectedAt: "x" } } };
     expect(providerDetectedRows({ providerId: "glm", connections, detectedBudgets })).toEqual([]);
   });
+
+  it("a keyless provider (no connections) shows its provider-keyed measurement as one whole-provider row", () => {
+    const detectedBudgets = { oc: { "big-pickle": { budget: 6, detectedAt: "2026-11-16T05:00:00.000Z" } } };
+    const rows = providerDetectedRows({ providerId: "oc", connections: [], detectedBudgets, keyless: true });
+    expect(rows.map((r) => [r.connId, r.connName, r.model, r.budget])).toEqual([
+      ["oc", "(toàn provider)", "big-pickle", 6],
+    ]);
+  });
+
+  it("a keyless provider that ALSO has connections stays per-key (no provider aggregate row)", () => {
+    const detectedBudgets = {
+      oc: { m: { budget: 6, detectedAt: "x" } },
+      "c-oc": { m: { budget: 2, detectedAt: "x" } },
+    };
+    const rows = providerDetectedRows({ providerId: "oc", connections: [{ id: "c-oc", provider: "oc", name: "K" }], detectedBudgets, keyless: true });
+    expect(rows.map((r) => r.connId)).toEqual(["c-oc"]);
+  });
+
+  it("a keyed provider without connections never shows a provider row", () => {
+    const detectedBudgets = { glm: { m: { budget: 5, detectedAt: "x" } } };
+    expect(providerDetectedRows({ providerId: "glm", connections: [], detectedBudgets })).toEqual([]);
+  });
 });

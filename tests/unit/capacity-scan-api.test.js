@@ -94,6 +94,18 @@ describe("/api/fork/capacity-scan", () => {
     expect(body.summary).toEqual({ combo: "combo-x", sum: 8, members: 2 });
   });
 
+  it("a keyless member (no connections) counts its provider-level lane: detected, else the global cap", async () => {
+    db.settings = {
+      combos: { "combo-k": { models: ["opencode/big-pickle", "opencode/untested"] } },
+      comboStrategies: { "combo-k": { fallbackStrategy: "fanout" } },
+      detectedBudgets: { opencode: { "big-pickle": { budget: 6 } } },
+    };
+    db.connections = [];
+    const body = await (await GET(req("GET", { query: "?combo=combo-k" }))).json();
+    // big-pickle: detected 6; untested: global 4 → Σ 10 over 2 members
+    expect(body.summary).toEqual({ combo: "combo-k", sum: 10, members: 2 });
+  });
+
   it("a nested combo member is counted, not summed", async () => {
     db.settings = {
       combos: {

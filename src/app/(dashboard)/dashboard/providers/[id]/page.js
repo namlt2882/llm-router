@@ -1913,7 +1913,7 @@ export default function ProviderDetailPage() {
         )}
         <div data-testid="provider-detected">
           <div className="mb-2 flex items-center justify-between gap-2">
-            <span className="text-sm font-medium">Hạn mức đã đo (theo key)</span>
+            <span className="text-sm font-medium">Hạn mức đã đo (theo key; provider không cần key đo cả provider)</span>
             <Button size="sm" onClick={runProviderScan} disabled={providerScanRunning}>
               {providerScanRunning ? (
                 <>
@@ -1924,15 +1924,15 @@ export default function ProviderDetailPage() {
             </Button>
           </div>
           {(() => {
-            const detectedRows = providerDetectedRows({ providerId, connections, detectedBudgets });
+            const detectedRows = providerDetectedRows({ providerId, connections, detectedBudgets, keyless: isFreeNoAuth });
             if (!detectedRows.length) {
-              return connections.length === 0 ? (
+              return connections.length === 0 && !isFreeNoAuth ? (
                 <p className="text-xs text-text-muted">
                   Provider này chưa có connection (key) nào — hạn mức theo key chỉ đo được khi có key.
                 </p>
               ) : (
                 <p className="text-xs text-text-muted">
-                  Chưa có số đo cho key nào — chọn model chuẩn đoán rồi bấm &quot;Chạy chuẩn đoán&quot;.
+                  Chưa có số đo — chọn model chuẩn đoán rồi bấm &quot;Chạy chuẩn đoán&quot;.
                 </p>
               );
             }
