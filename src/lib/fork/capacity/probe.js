@@ -12,7 +12,7 @@
  * checkAndRefreshToken and skips connections it cannot dispatch for.
  */
 import registry from "open-sse/providers/registry/index.js";
-import { getExecutor } from "open-sse/executors/index.js";
+import { getExecutor, hasSpecializedExecutor } from "open-sse/executors/index.js";
 import { classifyProbeError } from "./classifyError.js";
 
 /**
@@ -158,15 +158,20 @@ const drainResponse = async (response) => {
  * @param {{ probeTimeoutMs?: number }} [options]
  */
 export function makeExecutorDispatch({ probeTimeoutMs = 15000 } = {}) {
-  return async function dispatch({ provider, model }) {
+  return async function dispatch({ provider, connection, model }) {
     const executor = getExecutor(provider);
     if (!executor) return { ok: false, unsupported: true };
+    // A keyed provider's executor authenticates from credentials, so the probe
+    // must pass the connection's own key; keyless providers mint their state.
+    const credentials = connection?.apiKey || connection?.accessToken
+      ? { apiKey: connection.apiKey, accessToken: connection.accessToken, connectionId: connection.id }
+      : {};
     try {
       const { response } = await executor.execute({
         model,
         body: { model, messages: [{ role: "user", content: "hi" }], max_tokens: 8, stream: true },
         stream: true,
-        credentials: {},
+        credentials,
         signal: AbortSignal.timeout(probeTimeoutMs),
       });
       const bodyText = await drainResponse(response);
@@ -188,6 +193,11 @@ export function makeExecutorDispatch({ probeTimeoutMs = 15000 } = {}) {
  * @returns {(task: {provider: string, connection: object, model: string}) => Promise<{ok: true} | {ok: false, status?: number|null, bodyText?: string, unsupported?: true}>}
  */
 export function dispatchFor(provider) {
+  // A specialized executor is the provider's REAL request shape (session
+  // headers, forced streaming, fingerprint quirks); the generic openai POST
+  // bypasses all of that. opencode-go is the proof: it declares an openai
+  // transport yet rejects a session-less request with 400 MissingSessionID.
+  if (hasSpecializedExecutor(provider)) return makeExecutorDispatch();
   const entry = Array.isArray(registry) ? registry.find((p) => p?.id === provider) : null;
   if (entry?.transports?.some((t) => t?.format === "openai")) return makeDefaultDispatch();
   return makeExecutorDispatch();

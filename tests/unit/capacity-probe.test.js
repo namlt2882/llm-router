@@ -210,16 +210,16 @@ describe("makeDefaultDispatch", () => {
 // impersonating fetch) so the probe measures the lane live traffic uses.
 const executorState = vi.hoisted(() => ({ calls: [], respond: null }));
 vi.mock("open-sse/executors/index.js", () => ({
-  getExecutor: (provider) => (provider === "opencode" ? {
+  getExecutor: (provider) => (provider === "opencode" || provider === "opencode-go" ? {
     execute: async ({ model, body, stream, credentials, signal }) => {
-      executorState.calls.push({ model, stream, hasBody: !!body, hasSignal: !!signal, bareCreds: !credentials || Object.keys(credentials).length === 0 });
+      executorState.calls.push({ model, stream, hasBody: !!body, hasSignal: !!signal, bareCreds: !credentials || Object.keys(credentials).length === 0, apiKey: credentials?.apiKey });
       const respond = executorState.respond;
       if (respond) return respond();
       const streamBody = { getReader: () => ({ read: async () => ({ done: true }) }) };
       return { response: { ok: true, status: 200, body: streamBody } };
     },
   } : null),
-  hasSpecializedExecutor: (provider) => provider === "opencode",
+  hasSpecializedExecutor: (provider) => provider === "opencode" || provider === "opencode-go",
 }));
 
 describe("makeExecutorDispatch", () => {
@@ -264,5 +264,24 @@ describe("makeExecutorDispatch", () => {
     const glm = dispatchFor("glm");
     // glm declares an openai transport → the default fetch-based dispatch (not executor)
     expect(await glm({ provider: "glm", connection: { apiKey: "k" }, model: "m" })).toBeDefined();
+  });
+
+  // Found live 2026-11-16: opencode-go declares an openai transport, so
+  // dispatchFor took the generic fetch path — which sends no
+  // x-opencode-session, and upstream answered 400 MissingSessionID for every
+  // probe. A provider with a specialized executor must be probed through it,
+  // and the executor must receive the connection's credentials (the probe
+  // otherwise runs keyless and gets 401).
+  it("a provider with a specialized executor is probed through it, with the connection's credentials", async () => {
+    const { dispatchFor } = await import("../../src/lib/fork/capacity/probe.js");
+    executorState.calls.length = 0;
+    const result = await dispatchFor("opencode-go")({
+      provider: "opencode-go",
+      connection: { id: "c-ocg", apiKey: "sk-ocg" },
+      model: "beam-free",
+    });
+    expect(result).toEqual({ ok: true });
+    expect(executorState.calls.length).toBe(1);
+    expect(executorState.calls[0].apiKey).toBe("sk-ocg");
   });
 });
