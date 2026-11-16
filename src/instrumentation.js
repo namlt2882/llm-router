@@ -29,5 +29,13 @@ export async function register() {
     } catch (e) {
       console.warn("[QUOTA-RECHECK] scheduler failed to start:", e?.message || e);
     }
+
+    // 30s concurrency sampler feeding the Usage tab's Concurrency chart.
+    try {
+      const { ensureConcurrencyScheduler } = await import("@/lib/usage/concurrencySampler.js");
+      ensureConcurrencyScheduler();
+    } catch (e) {
+      console.warn("[CONCURRENCY] scheduler failed to start:", e?.message || e);
+    }
   }
 }

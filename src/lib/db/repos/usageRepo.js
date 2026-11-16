@@ -813,3 +813,25 @@ export async function getRecentLogs(limit = 200) {
     return [];
   }
 }
+
+// --- concurrencySamples (2026-11-16 concurrency tab) ------------------------
+// One row per 30s sampler tick: total in-flight requests and the system's
+// total concurrency budget at that moment. Columns are text under the mirror
+// contract; the PG copy is a hypertable with 60-day retention.
+
+export async function recordConcurrencySample(inflight, totalBudget, opts = {}) {
+  try {
+    const db = await getAdapter();
+    const ts = opts.now instanceof Date ? opts.now.toISOString() : String(opts.now || new Date().toISOString());
+    await db.run(
+      "INSERT INTO concurrencySamples (ts, inflight, totalBudget) VALUES (?, ?, ?)",
+      [ts, String(inflight), String(totalBudget)],
+    );
+  } catch (e) {
+    console.error("[usageRepo] recordConcurrencySample failed:", e.message);
+  }
+}
+
+export async function pruneConcurrencySamples(db, cutoffIso) {
+  await db.run("DELETE FROM concurrencySamples WHERE ts < ?", [cutoffIso]);
+}
