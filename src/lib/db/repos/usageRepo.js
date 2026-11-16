@@ -774,6 +774,103 @@ export async function getChartData(period = "7d") {
   });
 }
 
+/**
+ * Chart series for the Usage tab's Concurrency view (2026-11-16 design):
+ * per bucket, `concurrency` is the AVERAGE of the sampler's in-flight counts
+ * (Steve's pick), `utilityRate` is budget-weighted — (Σ inflight / Σ
+ * totalBudget) × 100, `null` when the bucket saw no budget at all (a zero
+ * budget means the lane was closed, not "infinitely utilised") — and the
+ * token/cost lines run CUMULATIVELY ACROSS THE SELECTED WINDOW (Steve's
+ * pick), resetting when the window changes, not all-time.
+ */
+export async function getConcurrencyChartData(period = "7d") {
+  const db = await getAdapter();
+  const now = Date.now();
+  const dateKeyOf = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  const hourLabel = (ts) => new Date(ts).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", hour12: false });
+  const dayLabel = (d) => d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+
+  // Buckets share one shape: { label, start, end, ms } — start/end are epoch
+  // bounds the sample/usage rows are bucketed against.
+  let buckets;
+  if (period === "today") {
+    const start = new Date();
+    start.setHours(0, 0, 0, 0);
+    buckets = Array.from({ length: 24 }, (_, i) => {
+      const s = start.getTime() + i * 3600000;
+      return { label: hourLabel(s), start: s, end: s + 3600000 };
+    });
+  } else if (period === "24h") {
+    const start = now - 24 * 3600000;
+    buckets = Array.from({ length: 24 }, (_, i) => {
+      const s = start + i * 3600000;
+      return { label: hourLabel(s), start: s, end: s + 3600000 };
+    });
+  } else {
+    let firstDay;
+    if (period === "all") {
+      const dayRows = loadDaysInRange(db, null);
+      if (!dayRows.length) return [];
+      firstDay = new Date(dayRows[0].dateKey + "T00:00:00");
+    } else {
+      const count = period === "7d" ? 7 : period === "30d" ? 30 : 60;
+      firstDay = new Date();
+      firstDay.setHours(0, 0, 0, 0);
+      firstDay.setDate(firstDay.getDate() - (count - 1));
+    }
+    const lastDay = new Date();
+    lastDay.setHours(0, 0, 0, 0);
+    const days = Math.max(1, Math.round((lastDay - firstDay) / 86400000) + 1);
+    buckets = Array.from({ length: days }, (_, i) => {
+      const d = new Date(firstDay);
+      d.setDate(d.getDate() + i);
+      return { label: dayLabel(d), start: d.getTime(), end: d.getTime() + 86400000, dateKey: dateKeyOf(d) };
+    });
+  }
+
+  const windowStart = new Date(buckets[0].start).toISOString();
+  const inflightSum = new Array(buckets.length).fill(0);
+  const budgetSum = new Array(buckets.length).fill(0);
+  const sampleCount = new Array(buckets.length).fill(0);
+  for (const s of db.all("SELECT ts, inflight, totalBudget FROM concurrencySamples WHERE ts >= ?", [windowStart])) {
+    const t = new Date(s.ts).getTime();
+    if (Number.isNaN(t) || t < buckets[0].start) continue;
+    // Contiguous ascending buckets: the FIRST bucket whose end passes t is the one containing it.
+    const idx = buckets.findIndex((b) => t < b.end);
+    if (idx < 0) continue;
+    inflightSum[idx] += Number(s.inflight) || 0;
+    budgetSum[idx] += Number(s.totalBudget) || 0;
+    sampleCount[idx] += 1;
+  }
+
+  // Usage rows in the window, walked chronologically so each bucket carries
+  // the running window total forward.
+  const usage = db.all(
+    "SELECT timestamp, promptTokens, completionTokens, cost FROM usageHistory WHERE timestamp >= ?",
+    [windowStart],
+  ).map((r) => ({ t: new Date(r.timestamp).getTime(), tokens: (r.promptTokens || 0) + (r.completionTokens || 0), cost: r.cost || 0 }))
+    .filter((r) => !Number.isNaN(r.t))
+    .sort((a, b) => a.t - b.t);
+
+  let cumTokens = 0;
+  let cumCost = 0;
+  let rowIdx = 0;
+  return buckets.map((b, i) => {
+    while (rowIdx < usage.length && usage[rowIdx].t < b.end) {
+      cumTokens += usage[rowIdx].tokens;
+      cumCost += usage[rowIdx].cost;
+      rowIdx += 1;
+    }
+    return {
+      label: b.label,
+      concurrency: sampleCount[i] ? inflightSum[i] / sampleCount[i] : 0,
+      utilityRate: budgetSum[i] > 0 ? (inflightSum[i] / budgetSum[i]) * 100 : null,
+      cumulativeTokens: cumTokens,
+      cumulativeCost: cumCost,
+    };
+  });
+}
+
 function formatLogDate(date = new Date()) {
   const pad = (n) => String(n).padStart(2, "0");
   return `${pad(date.getDate())}-${pad(date.getMonth() + 1)}-${date.getFullYear()} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;

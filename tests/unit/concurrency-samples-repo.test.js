@@ -1,9 +1,33 @@
-import { describe, expect, it } from "vitest";
-import { getAdapter } from "../../src/lib/db/driver.js";
-import { recordConcurrencySample, pruneConcurrencySamples } from "../../src/lib/db/repos/usageRepo.js";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+// Isolated DATA_DIR — the adapter must never touch ~/.9router (see
+// db-driver-chain.test.js for the original of this shape). resetModules so
+// paths.js re-reads DATA_DIR per test — it caches at import time.
+let tempDir;
+const originalDataDir = process.env.DATA_DIR;
+
+beforeEach(() => {
+  tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "9router-concrepo-"));
+  process.env.DATA_DIR = tempDir;
+  delete global._dbAdapter;
+  vi.resetModules();
+});
+
+afterEach(() => {
+  try { global._dbAdapter?.instance?.close?.(); } catch {}
+  delete global._dbAdapter;
+  if (tempDir) fs.rmSync(tempDir, { recursive: true, force: true });
+  if (originalDataDir === undefined) delete process.env.DATA_DIR;
+  else process.env.DATA_DIR = originalDataDir;
+});
 
 describe("concurrencySamples round-trip", () => {
   it("inserts rows, selects them back and prunes only old ones", async () => {
+    const { getAdapter } = await import("../../src/lib/db/driver.js");
+    const { recordConcurrencySample, pruneConcurrencySamples } = await import("../../src/lib/db/repos/usageRepo.js");
     const db = await getAdapter();
     await recordConcurrencySample(2, 10);
     const rows = db.all("SELECT ts, inflight, totalBudget FROM concurrencySamples ORDER BY id DESC LIMIT 1");

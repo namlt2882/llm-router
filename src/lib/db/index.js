@@ -62,7 +62,7 @@ export {
   statsEmitter, trackPendingRequest, getActiveRequests,
   saveRequestUsage, getUsageHistory, getUsageStats, getChartData,
   appendRequestLog, getRecentLogs,
-  recordConcurrencySample, pruneConcurrencySamples,
+  recordConcurrencySample, pruneConcurrencySamples, getConcurrencyChartData,
 } from "./repos/usageRepo.js";
 
 // Request details
