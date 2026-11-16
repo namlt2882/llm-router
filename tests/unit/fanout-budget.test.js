@@ -131,6 +131,14 @@ describe("detectedBudgetFor / effectiveBaseCap (per-(connection, model) scan res
     expect(detectedBudgetFor({}, "c1", "m1")).toBe(null);
   });
 
+  it("a measured quota reads as budget 0, while absent/junk stays null", () => {
+    // budget 0 alone is still rejected (a junk value); quota:true is what makes
+    // a zero MEASURED — the scan writes {budget:0, quota:true}.
+    expect(detectedBudgetFor({ c: { m: { budget: 0 } } }, "c", "m")).toBe(null);
+    expect(detectedBudgetFor({ c: { m: { budget: 0, quota: true } } }, "c", "m")).toBe(0);
+    expect(detectedBudgetFor({ c: { m: { budget: 16 } } }, "c", "m")).toBe(16);
+  });
+
   it("base cap: detected pair, else the global limit", () => {
     expect(effectiveBaseCap(detected, "c1", "m1", 4)).toBe(16);
     expect(effectiveBaseCap(detected, "c1", "untested", 4)).toBe(4); // untested model → global

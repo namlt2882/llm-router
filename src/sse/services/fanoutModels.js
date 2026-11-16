@@ -66,10 +66,10 @@ async function laneFor(model, info, fanoutCtx, settings, connectionsFor) {
   const globalLimit = accountInflightLimit();
 
   if (FREE_PROVIDERS[providerId]?.noAuth) {
-    const budget = keylessLaneLimit(
-      effectiveFanoutBudget(fanoutCtx, providerId, globalLimit, detected, info.model),
-      settings,
-    );
+    const rawBudget = effectiveFanoutBudget(fanoutCtx, providerId, globalLimit, detected, info.model);
+    // A measured quota (0) has no headroom at all — sort it to the back.
+    if (rawBudget === 0) return { lane: providerId, ratio: -1 };
+    const budget = keylessLaneLimit(rawBudget, settings);
     const used = getInflightCount(providerId) + pendingOn(providerId);
     return { lane: providerId, ratio: Math.max(0, 1 - used / budget) };
   }
@@ -79,6 +79,8 @@ async function laneFor(model, info, fanoutCtx, settings, connectionsFor) {
   for (const c of connections) {
     if (isModelLockActive(c, info.model)) continue;
     const budget = effectiveFanoutBudget(fanoutCtx, c.id, globalLimit, detected, info.model);
+    // A measured quota (0) is no usable account, like a locked one.
+    if (budget === 0) continue;
     const ratio = Math.max(0, 1 - (getInflightCount(c.id) + pendingOn(c.id)) / budget);
     if (ratio > best.ratio) best = { lane: c.id, ratio };
   }

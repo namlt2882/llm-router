@@ -102,6 +102,15 @@ describe("probeConnectionModel", () => {
     expect((await probeConnectionModel({ ...TASK, dispatch: config })).status).toBe("config");
   });
 
+  it("a level-1 quota refusal reports status quota, carrying no budget", async () => {
+    // Live 2026-11-16: deepseek-v4.1-flash on opencode-go is spent for the
+    // month; the probe must say "quota" (a measured ZERO), not throttle.
+    const dispatch = fakeUpstream({ limit: 0, fail: () => ({ ok: false, status: 429, bodyText: '{"error":{"type":"GoUsageLimitError","message":"OpenCode Go usage limit reached (monthly)"}}' }) });
+    const result = await probeConnectionModel({ ...TASK, provider: "opencode-go", dispatch });
+    expect(result.status).toBe("quota");
+    expect(result.budget).toBeUndefined();
+  });
+
   it("fetch-level network failures report unreachable", async () => {
     const dispatch = fakeUpstream({ limit: 0, fail: () => ({ ok: false, status: null, bodyText: "AbortError: The operation was aborted" }) });
     expect((await probeConnectionModel({ ...TASK, dispatch })).status).toBe("unreachable");

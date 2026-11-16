@@ -150,4 +150,10 @@ describe("fanout model ordering", () => {
     const { models } = await order(["opencode/x", "opencode/y"]);
     expect(models[0]).toBe("opencode/x");
   });
+
+  it("a measured quota (budget 0) sorts the model to the back — quota, not headroom", async () => {
+    h.settings = { detectedBudgets: { g1: { a: { budget: 0, quota: true } }, o1: { b: { budget: 8 } } } };
+    const { models } = await order(["glm/a", "openai/b"]);
+    expect(models[0]).toBe("openai/b");
+  });
 });

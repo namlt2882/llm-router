@@ -317,6 +317,23 @@ describe("review minors: knobs, late busy, pooled refresh", () => {
     expect("unbounded" in d.m2).toBe(false);
   });
 
+  it("a quota refusal stores budget 0 + quota:true — a measured zero, not an unknown", async () => {
+    const env = makeEnv();
+    env.connections = [conn("c-ok")];
+    env.settings = { capacityScan: { enabled: true }, diagnosticModels: { "c-ok": ["spent", "free"] } };
+    env.probeResults = {
+      "c-ok:spent": { status: "quota", reason: "usage limit reached", requests: 1 },
+      "c-ok:free": { status: "ok", budget: 16, requests: 26 },
+    };
+    const result = await runCapacityScan(env.scanDeps());
+    const d = env.settings.detectedBudgets["c-ok"];
+    expect(d.spent).toMatchObject({ budget: 0, quota: true });
+    expect(d.free).toMatchObject({ budget: 16 });
+    expect("quota" in d.free).toBe(false);
+    expect(result.detected).toBe(2);
+    expect(result.unknown).toBe(0);
+  });
+
   it("threads settings maxLevel to the probe (minor 3)", async () => {
     const env = makeEnv();
     env.connections = [conn("c1")];

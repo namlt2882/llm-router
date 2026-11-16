@@ -13,7 +13,7 @@ import { keylessLaneLimit } from "@/sse/services/fanoutBudget.js";
  * `unbounded` marks a budget whose whole ramp passed (a floor, not a limit);
  * the keyless lane row also carries `applied`, the cap runtime really uses.
  * @param {{ providerId: string, connections: Array<{id: string, provider: string, name?: string}>, detectedBudgets: Record<string, Record<string, {budget: number, detectedAt: string, unbounded?: boolean}>> | null, keyless?: boolean, settings?: {keylessMaxInflight?: unknown} | null }} input
- * @returns {Array<{connId: string, connName: string, model: string, budget: number, detectedAt: string, unbounded: boolean, applied?: number}>}
+ * @returns {Array<{connId: string, connName: string, model: string, budget: number, detectedAt: string, unbounded: boolean, quota?: boolean, applied?: number}>}
  */
 export function providerDetectedRows({ providerId, connections, detectedBudgets, keyless = false, settings = null }) {
   const map = detectedBudgets && typeof detectedBudgets === "object" ? detectedBudgets : {};
@@ -21,11 +21,15 @@ export function providerDetectedRows({ providerId, connections, detectedBudgets,
   const push = (id, name, lane = false) => {
     const models = map[id] && typeof map[id] === "object" ? map[id] : {};
     for (const [model, v] of Object.entries(models)) {
-      if (!v || typeof v !== "object" || !Number.isInteger(v.budget) || v.budget < 1) continue;
+      if (!v || typeof v !== "object" || !Number.isInteger(v.budget)) continue;
+      // A measured quota is budget 0 with quota:true; every other row needs >= 1.
+      const quota = v.quota === true && v.budget === 0;
+      if (!quota && v.budget < 1) continue;
       rows.push({
         connId: id, connName: name, model, budget: v.budget, detectedAt: v.detectedAt || null,
         unbounded: v.unbounded === true,
-        ...(lane ? { applied: keylessLaneLimit(v.budget, settings) } : {}),
+        ...(quota ? { quota: true } : {}),
+        ...(lane && !quota ? { applied: keylessLaneLimit(v.budget, settings) } : {}),
       });
     }
   };
@@ -47,6 +51,7 @@ export function providerDetectedRows({ providerId, connections, detectedBudgets,
  * @returns {string}
  */
 export function capacityLabel(row) {
+  if (row.quota) return "hết hạn mức";
   if (row.applied) return `áp dụng tối đa ${row.applied} phiên song song`;
   return row.unbounded ? `chưa chạm giới hạn ở ${row.budget}` : `~${row.budget} phiên song song`;
 }

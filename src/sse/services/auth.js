@@ -111,6 +111,10 @@ async function selectProviderCredentials(provider, excludeConnectionIds = null, 
         effectiveFanoutBudget(fanoutCtx, providerId, accountInflightLimit(), settings.detectedBudgets || null, model),
         settings,
       );
+      if (keylessLimit <= 0) {
+        log.warn("AUTH", `${provider} | keyless lane out of quota (measured budget 0)`);
+        return null;
+      }
       if (!tryAcquireAccountSlot(providerId, keylessLimit)) {
         log.warn("AUTH", `${provider} | keyless lane at its in-flight cap (${keylessLimit})`);
         return {
@@ -160,12 +164,16 @@ async function selectProviderCredentials(provider, excludeConnectionIds = null, 
     const detectedBudgets = (await getSettings())?.detectedBudgets || null;
     const limitFor = (c) => effectiveFanoutBudget(fanoutCtx, c.id, inflightLimit, detectedBudgets, model);
     let busyCount = 0;
+    let quotaCount = 0;
 
     // Filter out model-locked, excluded, and Antigravity quota-exhausted connections.
     const availableConnections = connections.filter(c => {
       if (excludeSet.has(c.id)) return false;
       if (isModelLockActive(c, model)) return false;
-      if (getInflightCount(c.id) >= limitFor(c)) {
+      // A measured quota (budget 0) is terminal for this model, not "busy".
+      const limit = limitFor(c);
+      if (limit <= 0) { quotaCount += 1; return false; }
+      if (getInflightCount(c.id) >= limit) {
         busyCount += 1;
         return false;
       }
@@ -232,6 +240,10 @@ async function selectProviderCredentials(provider, excludeConnectionIds = null, 
           lastError: "All accounts at max in-flight",
           lastErrorCode: "account_busy",
         };
+      }
+      if (quotaCount > 0 && busyCount === 0) {
+        log.warn("AUTH", `${provider} | all ${connections.length} accounts out of quota for ${model || "all"} (measured budget 0)`);
+        return null;
       }
       log.warn("AUTH", `${provider} | all ${connections.length} accounts unavailable`);
       return null;

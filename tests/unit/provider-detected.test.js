@@ -106,11 +106,22 @@ describe("providerDetectedRows", () => {
   });
 });
 
+  it("carries a measured quota (budget 0) as a row so the card can show it", () => {
+    const detectedBudgets = { "c-1": { "deepseek-v4.1-flash": { budget: 0, quota: true, detectedAt: "2026-11-16T10:00:00.000Z" } } };
+    const rows = providerDetectedRows({ providerId: "glm", connections: [{ id: "c-1", provider: "glm", name: "Nam" }], detectedBudgets });
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ model: "deepseek-v4.1-flash", budget: 0, quota: true });
+  });
+
 describe("capacityLabel", () => {
   it("a keyless lane row shows only the applied cap, never the measured 16/32", () => {
     expect(capacityLabel({ budget: 16, unbounded: false, applied: 6 })).toBe("áp dụng tối đa 6 phiên song song");
     expect(capacityLabel({ budget: 32, unbounded: true, applied: 6 })).toBe("áp dụng tối đa 6 phiên song song");
     expect(capacityLabel({ budget: 3, unbounded: false, applied: 3 })).toBe("áp dụng tối đa 3 phiên song song");
+  });
+
+  it("a measured quota row says 'hết hạn mức', not a capacity", () => {
+    expect(capacityLabel({ budget: 0, quota: true })).toBe("hết hạn mức");
   });
 
   it("a per-key row keeps its measurement (a floor when unbounded)", () => {

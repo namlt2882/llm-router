@@ -40,17 +40,21 @@ export function parseFanoutCtx(cfg) {
 
 /**
  * Detected budget for one (connection, model) pair from the capacity scan
- * (`settings.detectedBudgets`), or null when that pair was never measured or
- * holds no integer >= 1. An untested model has NO budget — callers fall back
- * to the global limit (ruling 2026-11-16: no min-aggregate, no
- * representative-model guessing).
- * @param {Record<string, Record<string, {budget?: unknown}>}|null|undefined} detected
+ * (`settings.detectedBudgets`), or null when that pair was never measured.
+ * A measured quota is a REAL zero: the scan marks it `{budget:0, quota:true}`,
+ * and it reads here as 0 so the model is excluded instead of falling back to
+ * the global limit. A bare `budget:0` with no quota flag is still junk → null.
+ * An untested model has NO budget — callers fall back to the global limit
+ * (ruling 2026-11-16: no min-aggregate, no representative-model guessing).
+ * @param {Record<string, Record<string, {budget?: unknown, quota?: unknown}>}|null|undefined} detected
  * @param {string} connectionId
  * @param {string} model
  * @returns {number | null}
  */
 export function detectedBudgetFor(detected, connectionId, model) {
-  const value = detected?.[connectionId]?.[model]?.budget;
+  const entry = detected?.[connectionId]?.[model];
+  const value = entry?.budget;
+  if (value === 0 && entry?.quota === true) return 0;
   return Number.isInteger(value) && value >= 1 ? value : null;
 }
 
@@ -85,6 +89,9 @@ export function effectiveFanoutBudget(fanoutCtx, connectionId, globalLimit, dete
   if (Number.isInteger(own) && own >= 1) return own;
   if (detected && model) {
     const value = detectedBudgetFor(detected, connectionId, model);
+    // A measured quota (0) stays 0: the caller excludes that model. Only a
+    // positive detected budget is floored at 1 so percent never zeroes a real one.
+    if (value === 0) return 0;
     if (value !== null) return Math.max(1, Math.floor((value * (fanoutCtx?.percent ?? 100)) / 100));
   }
   return globalLimit;

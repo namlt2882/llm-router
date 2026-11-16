@@ -217,7 +217,17 @@ async function runCapacityScanLocked({
         result = { status: "unreachable", reason: String(e?.message || e) };
       }
       probeRequests += Number.isInteger(result.requests) ? result.requests : 0;
-      if (result.status === "ok" && Number.isInteger(result.budget) && result.budget >= 1) {
+      if (result.status === "quota") {
+        // A spent allowance is a REAL measurement of zero, not an unknown:
+        // the model is unusable until the plan resets, so the budget is 0.
+        detectedBudgets[fresh.id] = detectedBudgets[fresh.id] || {};
+        detectedBudgets[fresh.id][model] = {
+          budget: 0,
+          quota: true,
+          detectedAt: new Date(now()).toISOString(),
+        };
+        detected += 1;
+      } else if (result.status === "ok" && Number.isInteger(result.budget) && result.budget >= 1) {
         detectedBudgets[fresh.id] = detectedBudgets[fresh.id] || {};
         detectedBudgets[fresh.id][model] = {
           budget: result.budget,

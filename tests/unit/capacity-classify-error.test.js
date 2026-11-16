@@ -48,6 +48,16 @@ describe("classifyProbeError", () => {
   });
 });
 
+  // Live 2026-11-16: opencode-go's paid models answer 429 GoUsageLimitError
+  // ("OpenCode Go usage limit reached (monthly, resets in 8d 4h)") once the
+  // plan's allowance is spent. That is terminal for the model, not a
+  // transient rate limit — classifying it as throttle left the scan reading
+  // "unknown" and the budget untouched.
+  it("opencode-go GoUsageLimitError reads as quota (terminal for the model)", () => {
+    const body = '{"type":"error","error":{"type":"GoUsageLimitError","message":"OpenCode Go usage limit reached (monthly, resets in 8d 4h). To keep going now, turn on Extra Usage or upgrade to Go Plus at https://opencode.ai/console/x/go."},"metadata":{"limitName":"monthly"}}';
+    expect(classifyProbeError({ provider: "opencode-go", status: 429, bodyText: body })).toBe("quota");
+  });
+
 describe("PROVIDER_THROTTLE_CODES", () => {
   it("enumerates the z.ai family the scan UI and docs advertise", () => {
     expect(PROVIDER_THROTTLE_CODES).toHaveProperty("glm");

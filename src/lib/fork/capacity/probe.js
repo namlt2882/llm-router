@@ -31,7 +31,7 @@ const snippet = (fail) => String(fail?.bodyText || "").slice(0, 200);
 /**
  * Probe one (connection, model) pair.
  * @param {{ provider: string, connection: object, model: string, maxLevel?: number, dispatch: (task: {provider: string, connection: object, model: string}) => Promise<{ok: true} | {ok: false, status?: number|null, bodyText?: string, unsupported?: true}> }} input
- * @returns {Promise<{ status: "ok", budget: number, unbounded?: true } | { status: "unknown"|"unreachable"|"auth"|"config"|"balance"|"throttle"|"unsupported", reason?: string }>}
+ * @returns {Promise<{ status: "ok", budget: number, unbounded?: true } | { status: "unknown"|"unreachable"|"auth"|"config"|"balance"|"quota"|"throttle"|"unsupported", reason?: string }>}
  */
 export async function probeConnectionModel({ provider, connection, model, maxLevel = 32, dispatch = makeDefaultDispatch() }) {
   const levels = rampLevels(maxLevel);
