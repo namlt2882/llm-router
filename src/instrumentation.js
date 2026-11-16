@@ -20,5 +20,14 @@ export async function register() {
     } catch (e) {
       console.warn("[CAPACITY] scheduler failed to start:", e?.message || e);
     }
+
+    // 60s re-check of quota lanes the live collapse scheduled for reopening;
+    // same fail-open shape as the capacity scheduler.
+    try {
+      const { ensureQuotaRecheckScheduler } = await import("@/lib/fork/capacity/quotaRecheck.js");
+      ensureQuotaRecheckScheduler();
+    } catch (e) {
+      console.warn("[QUOTA-RECHECK] scheduler failed to start:", e?.message || e);
+    }
   }
 }
