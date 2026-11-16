@@ -1,6 +1,14 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { matchesQuotaHints } from "../../src/lib/fork/capacity/classifyError.js";
-import { parseResetsIn } from "../../src/sse/services/quotaCollapse.js";
+import { handleLiveQuotaError, parseResetsIn } from "../../src/sse/services/quotaCollapse.js";
+
+// In-memory settings — quotaCollapse resolves the same "@/lib/localDb" module,
+// so its writes land in this map (vi.mock is hoisted above every import).
+const db = vi.hoisted(() => ({ settings: {} }));
+vi.mock("@/lib/localDb", () => ({
+  getSettings: async () => db.settings,
+  updateSettings: async (patch) => { db.settings = { ...db.settings, ...patch }; },
+}));
 
 describe("matchesQuotaHints", () => {
   it("matches the scan's quota dialects", () => {
@@ -23,5 +31,42 @@ describe("parseResetsIn", () => {
     expect(parseResetsIn("GoUsageLimitError")).toBe(null);
     expect(parseResetsIn("resets in soon")).toBe(null);
     expect(parseResetsIn(undefined)).toBe(null);
+  });
+});
+
+describe("handleLiveQuotaError", () => {
+  beforeEach(() => { db.settings = {}; });
+
+  it("collapses a hint-matched error with a parseable reset within 24h, stashing previousBudget", async () => {
+    db.settings = { detectedBudgets: { c1: { m1: { budget: 4 } } } };
+    const collapsed = await handleLiveQuotaError({ connectionId: "c1", provider: "opencode-go", model: "m1", errorText: "GoUsageLimitError resets in 5h" });
+    expect(collapsed).toBe(true);
+    const entry = db.settings.detectedBudgets.c1.m1;
+    expect(entry).toMatchObject({ budget: 0, quota: true, previousBudget: 4, source: "live" });
+    expect(db.settings.quotaRecheck).toEqual([{ connectionId: "c1", provider: "opencode-go", model: "m1", at: expect.any(String) }]);
+  });
+
+  it("collapses on resetsAtMs alone (GLM 1308) and enqueues when the reset is within 24h", async () => {
+    const at = Date.now() + 5 * 3600000;
+    const collapsed = await handleLiveQuotaError({ connectionId: "c1", provider: "glm", model: "m1", errorText: "error 1308", resetsAtMs: at });
+    expect(collapsed).toBe(true);
+    expect(new Date(db.settings.quotaRecheck[0].at).getTime()).toBeGreaterThanOrEqual(at - 2000);
+  });
+
+  it("does not collapse a generic 500 and does not enqueue past-24h or unparseable resets", async () => {
+    expect(await handleLiveQuotaError({ connectionId: "c1", provider: "glm", model: "m", errorText: "internal error", resetsAtMs: null })).toBe(false);
+    expect(await handleLiveQuotaError({ connectionId: "c1", provider: "glm", model: "m", errorText: "GoUsageLimitError resets in 8d" })).toBe(true);
+    expect(db.settings.quotaRecheck).toBeUndefined();
+    expect(await handleLiveQuotaError({ connectionId: "c1", provider: "glm", model: "m", errorText: "GoUsageLimitError" })).toBe(true);
+    expect(db.settings.quotaRecheck).toBeUndefined();
+  });
+
+  it("writes keyless lanes under the provider id and dedupes the queue by connection+model", async () => {
+    await handleLiveQuotaError({ connectionId: "opencode", provider: "opencode", model: "big-pickle", errorText: "GoUsageLimitError resets in 2h" });
+    expect(db.settings.detectedBudgets.opencode["big-pickle"].budget).toBe(0);
+    await handleLiveQuotaError({ connectionId: "c1", provider: "glm", model: "m1", errorText: "error 1308", resetsAtMs: Date.now() + 3600000 });
+    await handleLiveQuotaError({ connectionId: "c1", provider: "glm", model: "m1", errorText: "error 1308", resetsAtMs: Date.now() + 7200000 });
+    expect(db.settings.quotaRecheck).toHaveLength(2);
+    expect(db.settings.quotaRecheck.filter((e) => e.connectionId === "c1")).toHaveLength(1);
   });
 });
