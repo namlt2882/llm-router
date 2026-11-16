@@ -140,6 +140,33 @@ describe("keyless provider lane (noauth) admission", () => {
     expect(h.acquired).toEqual([["opencode", 2]]);
   });
 
+  it("an unbounded measurement (whole ramp passed) is clamped to the keyless ceiling of 6", async () => {
+    h.settings.detectedBudgets = { opencode: { "m-free": { budget: 32, unbounded: true } } };
+    await getProviderCredentials("opencode", null, "m-free");
+    expect(h.acquired).toEqual([["opencode", 6]]);
+  });
+
+  it("a measured limit below the ceiling stays as measured", async () => {
+    h.settings.detectedBudgets = { opencode: { "m-free": { budget: 3 } } };
+    await getProviderCredentials("opencode", null, "m-free");
+    expect(h.acquired).toEqual([["opencode", 3]]);
+  });
+
+  it("settings.keylessMaxInflight overrides the ceiling", async () => {
+    h.settings.detectedBudgets = { opencode: { "m-free": { budget: 32, unbounded: true } } };
+    h.settings.keylessMaxInflight = 10;
+    await getProviderCredentials("opencode", null, "m-free");
+    expect(h.acquired).toEqual([["opencode", 10]]);
+  });
+
+  it("a connection-backed provider is NOT clamped by the keyless ceiling", async () => {
+    h.settings.detectedBudgets = { "conn-1": { m: { budget: 20 } } };
+    h.inflight = { "conn-1": 0, "conn-2": 4 };
+    const pick = await getProviderCredentials("openai", null, "m");
+    expect(pick?.connectionId).toBe("conn-1");
+    expect(h.acquired[h.acquired.length - 1]).toEqual(["conn-1", 20]);
+  });
+
   it("a failure never locks or falls back off the keyless lane (no connection row to lock)", async () => {
     h.shouldFallback = true; // the classifier WOULD fall back for a real account
     expect(await markAccountUnavailable("opencode", 429, "slow down", "opencode", "m-free"))

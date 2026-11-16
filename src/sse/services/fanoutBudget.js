@@ -90,6 +90,24 @@ export function effectiveFanoutBudget(fanoutCtx, connectionId, globalLimit, dete
   return globalLimit;
 }
 
+/** Default ceiling on a keyless (free, shared) lane's in-flight requests. */
+export const KEYLESS_MAX_INFLIGHT = 6;
+
+/**
+ * Clamp a keyless lane's resolved budget to the lane ceiling. A free lane is
+ * one shared upstream allowance, and a scan whose whole ramp passed only proves
+ * "no limit seen" — so the ceiling bounds even a detected 32.
+ * `settings.keylessMaxInflight` (integer >= 1) overrides the default of 6.
+ * @param {number} budget the resolved per-lane budget
+ * @param {{keylessMaxInflight?: unknown}|null|undefined} settings
+ * @returns {number}
+ */
+export function keylessLaneLimit(budget, settings) {
+  const own = settings?.keylessMaxInflight;
+  const ceiling = Number.isInteger(own) && own >= 1 ? own : KEYLESS_MAX_INFLIGHT;
+  return Math.min(budget, ceiling);
+}
+
 /**
  * Rank fanout candidates by how much of their own budget is free, descending;
  * ties break by backoff level (least punished first), then by oldest use

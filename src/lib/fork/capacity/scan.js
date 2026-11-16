@@ -219,7 +219,11 @@ async function runCapacityScanLocked({
       probeRequests += Number.isInteger(result.requests) ? result.requests : 0;
       if (result.status === "ok" && Number.isInteger(result.budget) && result.budget >= 1) {
         detectedBudgets[fresh.id] = detectedBudgets[fresh.id] || {};
-        detectedBudgets[fresh.id][model] = { budget: result.budget, detectedAt: new Date(now()).toISOString() };
+        detectedBudgets[fresh.id][model] = {
+          budget: result.budget,
+          detectedAt: new Date(now()).toISOString(),
+          ...(result.unbounded === true ? { unbounded: true } : {}),
+        };
         detected += 1;
       } else {
         // keep the previous detected value; only a measurement moves it

@@ -80,4 +80,28 @@ describe("providerDetectedRows", () => {
     const detectedBudgets = { glm: { m: { budget: 5, detectedAt: "x" } } };
     expect(providerDetectedRows({ providerId: "glm", connections: [], detectedBudgets })).toEqual([]);
   });
+
+  it("carries the unbounded flag so the card can say 'no limit seen' instead of a capacity", () => {
+    const rows = providerDetectedRows({
+      providerId: "glm",
+      connections,
+      detectedBudgets: { "c-1": { a: { budget: 32, unbounded: true }, b: { budget: 4 } } },
+    });
+    const byModel = Object.fromEntries(rows.map((r) => [r.model, r]));
+    expect(byModel.a.unbounded).toBe(true);
+    expect(byModel.b.unbounded).toBe(false);
+  });
+
+  it("a keyless row reports the applied lane cap (ceiling 6 by default, settings override)", () => {
+    const detectedBudgets = { opencode: { a: { budget: 32, unbounded: true }, b: { budget: 3 } } };
+    const rows = providerDetectedRows({ providerId: "opencode", connections: [], detectedBudgets, keyless: true });
+    expect(Object.fromEntries(rows.map((r) => [r.model, r.applied]))).toEqual({ a: 6, b: 3 });
+    const wide = providerDetectedRows({ providerId: "opencode", connections: [], detectedBudgets, keyless: true, settings: { keylessMaxInflight: 10 } });
+    expect(wide.find((r) => r.model === "a").applied).toBe(10);
+  });
+
+  it("per-key rows have no applied cap (their budget IS the cap)", () => {
+    const rows = providerDetectedRows({ providerId: "glm", connections, detectedBudgets: { "c-1": { a: { budget: 32 } } } });
+    expect(rows[0].applied).toBeUndefined();
+  });
 });

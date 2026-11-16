@@ -303,6 +303,20 @@ describe("review fixes: refreshed creds + scan mutex", () => {
 // probe time; the token refresh rides the worker pool instead of a serial
 // upfront loop.
 describe("review minors: knobs, late busy, pooled refresh", () => {
+  it("stores unbounded:true next to the budget when the whole ramp passed, and omits it for a measured limit", async () => {
+    const env = makeEnv();
+    env.connections = [conn("c-ok")];
+    env.settings = { capacityScan: { enabled: true }, diagnosticModels: { "c-ok": ["m1", "m2"] } };
+    env.probeFn = async ({ model }) => (model === "m1"
+      ? { status: "ok", budget: 32, requests: 63, unbounded: true }
+      : { status: "ok", budget: 5, requests: 26 });
+    await runCapacityScan(env.scanDeps());
+    const d = env.settings.detectedBudgets["c-ok"];
+    expect(d.m1).toMatchObject({ budget: 32, unbounded: true });
+    expect(d.m2.budget).toBe(5);
+    expect("unbounded" in d.m2).toBe(false);
+  });
+
   it("threads settings maxLevel to the probe (minor 3)", async () => {
     const env = makeEnv();
     env.connections = [conn("c1")];

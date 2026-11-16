@@ -172,3 +172,19 @@ describe("effectiveFanoutBudget chain (manual > percent×detected > global)", ()
     expect(effectiveFanoutBudget(ctx, "c1", global, { c1: { m: { budget: 9 } } })).toBe(6); // manual unscaled even here
   });
 });
+
+describe("keylessLaneLimit (shared free lanes cannot sustain a wide fan-out)", () => {
+  it("caps the resolved budget at the default ceiling of 6", async () => {
+    const { keylessLaneLimit } = await import("@/sse/services/fanoutBudget.js");
+    expect(keylessLaneLimit(32, {})).toBe(6);
+    expect(keylessLaneLimit(3, {})).toBe(3);
+    expect(keylessLaneLimit(4, null)).toBe(4);
+  });
+  it("honours settings.keylessMaxInflight when it is an integer >= 1, ignores junk", async () => {
+    const { keylessLaneLimit } = await import("@/sse/services/fanoutBudget.js");
+    expect(keylessLaneLimit(32, { keylessMaxInflight: 10 })).toBe(10);
+    expect(keylessLaneLimit(32, { keylessMaxInflight: 0 })).toBe(6);
+    expect(keylessLaneLimit(32, { keylessMaxInflight: "9" })).toBe(6);
+    expect(keylessLaneLimit(32, { keylessMaxInflight: 2.5 })).toBe(6);
+  });
+});

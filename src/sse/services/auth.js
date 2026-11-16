@@ -19,7 +19,7 @@ import {
 } from "./accountInflight.js";
 import * as log from "../utils/logger.js";
 // Fork patch #19: combo-scoped fanout — per-account budgets + headroom ranking.
-import { parseFanoutCtx, effectiveFanoutBudget, rankFanout } from "./fanoutBudget.js";
+import { parseFanoutCtx, effectiveFanoutBudget, rankFanout, keylessLaneLimit } from "./fanoutBudget.js";
 
 // The keyless lane has no connection row: its account id is the provider id
 // (or the legacy "noauth"), and there is nothing to lock or clear.
@@ -107,7 +107,10 @@ async function selectProviderCredentials(provider, excludeConnectionIds = null, 
       // Keyless lane: no connection row, so the PROVIDER ID is the account id —
       // the capacity scan stores its measurement under detectedBudgets[providerId]
       // and the same per-key chain (manual → percent×detected → global) caps it.
-      const keylessLimit = effectiveFanoutBudget(fanoutCtx, providerId, accountInflightLimit(), settings.detectedBudgets || null, model);
+      const keylessLimit = keylessLaneLimit(
+        effectiveFanoutBudget(fanoutCtx, providerId, accountInflightLimit(), settings.detectedBudgets || null, model),
+        settings,
+      );
       if (!tryAcquireAccountSlot(providerId, keylessLimit)) {
         log.warn("AUTH", `${provider} | keyless lane at its in-flight cap (${keylessLimit})`);
         return {

@@ -106,6 +106,17 @@ describe("/api/fork/capacity-scan", () => {
     expect(body.summary).toEqual({ combo: "combo-k", sum: 10, members: 2 });
   });
 
+  it("a keyless lane's contribution is clamped to the keyless ceiling (unbounded 32 counts 6)", async () => {
+    db.settings = {
+      combos: { "combo-u": { models: ["opencode/big-pickle"] } },
+      comboStrategies: { "combo-u": { fallbackStrategy: "fanout" } },
+      detectedBudgets: { opencode: { "big-pickle": { budget: 32, unbounded: true } } },
+    };
+    db.connections = [];
+    const body = await (await GET(req("GET", { query: "?combo=combo-u" }))).json();
+    expect(body.summary).toEqual({ combo: "combo-u", sum: 6, members: 1 });
+  });
+
   it("a nested combo member is counted, not summed", async () => {
     db.settings = {
       combos: {

@@ -3,7 +3,7 @@ import { assertForkAdmin } from "@/lib/forkAdminAuth";
 import { getSettings, getProviderConnections, getComboByName } from "@/lib/localDb";
 import { accountInflightLimit } from "@/sse/services/accountInflight.js";
 import { runCapacityScan } from "@/lib/fork/capacity/scan.js";
-import { fanoutCtxForEntry, effectiveFanoutBudget } from "@/sse/services/fanoutBudget.js";
+import { fanoutCtxForEntry, effectiveFanoutBudget, keylessLaneLimit } from "@/sse/services/fanoutBudget.js";
 import { resolveProviderId, FREE_PROVIDERS } from "@/shared/constants/providers.js";
 
 const NO_STORE = { "Cache-Control": "no-store" };
@@ -46,7 +46,7 @@ async function comboSummary(name, settings) {
     // account id is the provider id (auth.js) — count that lane.
     const providerId = resolveProviderId(provider);
     if (!counted && FREE_PROVIDERS[providerId]?.noAuth) {
-      sum += effectiveFanoutBudget(ctx, providerId, globalLimit, detected, model);
+      sum += keylessLaneLimit(effectiveFanoutBudget(ctx, providerId, globalLimit, detected, model), settings);
     }
   }
   return { combo: name, sum, members, ...(nested ? { nested } : {}) };

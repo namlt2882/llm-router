@@ -86,7 +86,7 @@ describe("probeConnectionModel", () => {
     try {
       const connection = { id: "c-live", apiKey: "sk-probe" };
       const result = await probeConnectionModel({ provider: "glm", connection, model: "glm-5.3-flash" });
-      expect(result).toEqual({ status: "ok", budget: 32, requests: 63 });
+      expect(result).toEqual({ status: "ok", budget: 32, requests: 63, unbounded: true });
       expect(calls.length).toBe(63);
       expect(calls[0].url).toBe("https://api.z.ai/api/coding/paas/v4/chat/completions");
       expect(calls[0].auth).toMatch(/^Bearer /);
@@ -117,8 +117,18 @@ describe("probeConnectionModel", () => {
   it("a limit above maxLevel caps the budget at maxLevel", async () => {
     const dispatch = fakeUpstream({ limit: 40 });
     const result = await probeConnectionModel({ ...TASK, maxLevel: 32, dispatch });
-    expect(result).toEqual({ status: "ok", budget: 32, requests: 63 }); // 1+2+4+8+16+32
+    expect(result).toEqual({ status: "ok", budget: 32, requests: 63, unbounded: true }); // 1+2+4+8+16+32
     expect(dispatch.peak()).toBeLessThanOrEqual(32);
+  });
+
+  it("a ramp that never fails is unbounded: the top level is 'no limit seen', not a measured limit", async () => {
+    const result = await probeConnectionModel({ ...TASK, maxLevel: 8, dispatch: fakeUpstream({}) });
+    expect(result).toEqual({ status: "ok", budget: 8, requests: 15, unbounded: true });
+  });
+
+  it("a measured limit carries no unbounded flag", async () => {
+    const result = await probeConnectionModel({ ...TASK, dispatch: fakeUpstream({ limit: 5 }) });
+    expect(result.unbounded).toBeUndefined();
   });
 
   it("a 200 without choices counts as failure (budget 2)", async () => {

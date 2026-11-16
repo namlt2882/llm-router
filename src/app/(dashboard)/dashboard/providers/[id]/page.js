@@ -88,6 +88,7 @@ export default function ProviderDetailPage() {
   const [autoPing, setAutoPing] = useState({ enabled: false, connections: {}, schedules: {} });
   const [diagnosticModels, setDiagnosticModels] = useState({});
   const [detectedBudgets, setDetectedBudgets] = useState({});
+  const [keylessMaxInflight, setKeylessMaxInflight] = useState(null);
   const [providerScanRunning, setProviderScanRunning] = useState(false);
   const [scheduleConnection, setScheduleConnection] = useState(null);
   const [suggestedModels, setSuggestedModels] = useState([]);
@@ -358,6 +359,7 @@ export default function ProviderDetailPage() {
       // Patch #20 capacity scan: per provider/connection diagnostic models
       setDiagnosticModels(settingsData.diagnosticModels || {});
       setDetectedBudgets(settingsData.detectedBudgets && typeof settingsData.detectedBudgets === "object" ? settingsData.detectedBudgets : {});
+      setKeylessMaxInflight(settingsData.keylessMaxInflight ?? null);
       if (nodesRes.ok) {
         let node = (nodesData.nodes || []).find((entry) => entry.id === providerId) || null;
 
@@ -531,6 +533,7 @@ export default function ProviderDetailPage() {
       const settingsRes = await fetch("/api/settings", { cache: "no-store" });
       const settingsData = settingsRes.ok ? await settingsRes.json() : {};
       setDetectedBudgets(settingsData.detectedBudgets && typeof settingsData.detectedBudgets === "object" ? settingsData.detectedBudgets : {});
+      setKeylessMaxInflight(settingsData.keylessMaxInflight ?? null);
     } catch (error) {
       console.log("Error refreshing detected budgets:", error);
     }
@@ -1924,7 +1927,7 @@ export default function ProviderDetailPage() {
             </Button>
           </div>
           {(() => {
-            const detectedRows = providerDetectedRows({ providerId, connections, detectedBudgets, keyless: isFreeNoAuth });
+            const detectedRows = providerDetectedRows({ providerId, connections, detectedBudgets, keyless: isFreeNoAuth, settings: { keylessMaxInflight } });
             if (!detectedRows.length) {
               return connections.length === 0 && !isFreeNoAuth ? (
                 <p className="text-xs text-text-muted">
@@ -1948,7 +1951,13 @@ export default function ProviderDetailPage() {
                       <span className="min-w-0 truncate text-[9px] italic text-text-muted/70" title={row.connName}>{row.connName}</span>
                     </span>
                     <span className="whitespace-nowrap text-text-muted">
-                      ~{row.budget} phiên song song
+                      {row.unbounded
+                        ? (row.applied
+                          ? <>chưa chạm giới hạn ở {row.budget} · áp dụng tối đa {row.applied} phiên</>
+                          : <>chưa chạm giới hạn ở {row.budget}</>)
+                        : (row.applied && row.applied < row.budget
+                          ? <>~{row.budget} phiên song song · áp dụng {row.applied}</>
+                          : <>~{row.budget} phiên song song</>)}
                       {row.detectedAt && (
                         <span title={row.detectedAt}> · {new Date(row.detectedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>
                       )}
