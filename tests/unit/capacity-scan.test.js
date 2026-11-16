@@ -292,3 +292,72 @@ describe("review fixes: refreshed creds + scan mutex", () => {
     expect(env.updates.filter((u) => u.capacityScan?.running === true).length).toBe(1);
   });
 });
+
+// Review minors 3/4/5 (2026-11-16): maxLevel + parallelism come from the
+// capacityScan settings and reach the probe; the busy check runs again at
+// probe time; the token refresh rides the worker pool instead of a serial
+// upfront loop.
+describe("review minors: knobs, late busy, pooled refresh", () => {
+  it("threads settings maxLevel to the probe (minor 3)", async () => {
+    const env = makeEnv();
+    env.connections = [conn("c1")];
+    env.settings = { diagnosticModels: { c1: ["m1"] }, capacityScan: { maxLevel: 8 } };
+    const seen = [];
+    env.probeFn = async (task) => { seen.push(task.maxLevel); return { status: "ok", budget: 4, requests: 1 }; };
+    await runCapacityScan(env.scanDeps());
+    expect(seen).toEqual([8]);
+  });
+
+  it("re-checks busy at probe time — traffic that arrived mid-scan is skipped, not probed (minor 4)", async () => {
+    const env = makeEnv();
+    env.connections = [conn("c1")];
+    env.settings = { diagnosticModels: { c1: ["m1"] } };
+    env.checkAndRefreshToken = async (_provider, c) => {
+      // traffic arrives while this connection waits in the pool
+      env.inflight[c.id] = 2;
+      env.refreshes.push(c.id);
+      return c;
+    };
+    const result = await runCapacityScan(env.scanDeps());
+    expect(result.detected).toBe(0);
+    expect(result.skipped).toBe(1);
+    expect(env.probes).toEqual([]);
+    expect(result.perProvider).toContainEqual({ provider: "glm", reason: "busy (inflight > 0)", count: 1 });
+  });
+
+  it("refresh rides the pool: with parallelism 1 each probe follows its own refresh (minor 5)", async () => {
+    const env = makeEnv();
+    env.connections = [conn("c1"), conn("c2")];
+    env.settings = { diagnosticModels: { c1: ["m1"], c2: ["m1"] }, capacityScan: { parallelism: 1 } };
+    const events = [];
+    const originalRefresh = env.checkAndRefreshToken;
+    env.checkAndRefreshToken = async (p, c) => { events.push(`refresh ${c.id}`); return originalRefresh(p, c); };
+    const originalProbe = env.probeFn;
+    env.probeFn = async (task) => { events.push(`probe ${task.connection.id}`); return originalProbe(task); };
+    await runCapacityScan(env.scanDeps());
+    expect(events).toEqual(["refresh c1", "probe c1", "refresh c2", "probe c2"]);
+  });
+});
+
+describe("review minor 9: scan failures are not silent", () => {
+  it("warns when the final settings re-read fails and still finishes on the start snapshot", async () => {
+    const env = makeEnv();
+    env.connections = [conn("c1")];
+    env.settings = { diagnosticModels: { c1: ["m1"] } };
+    let calls = 0;
+    const originalGet = env.getSettings;
+    env.getSettings = async () => {
+      calls += 1;
+      if (calls > 1) throw new Error("db down");
+      return originalGet();
+    };
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const result = await runCapacityScan(env.scanDeps());
+      expect(result.detected).toBe(1);
+      expect(warn).toHaveBeenCalledWith(expect.stringMatching(/CAPACITY/), expect.anything());
+    } finally {
+      warn.mockRestore();
+    }
+  });
+});

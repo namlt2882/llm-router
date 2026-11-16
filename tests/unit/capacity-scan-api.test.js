@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 // In-memory settings/connections — scan.js resolves the same "@/lib/localDb"
 // module, so its persisted running flag is visible to GET through this map.
-const db = vi.hoisted(() => ({ settings: {}, connections: [] }));
+const db = vi.hoisted(() => ({ settings: {}, connections: [], failUpdates: false }));
 const probeState = vi.hoisted(() => ({ slow: false }));
 
 vi.mock("next/server", () => ({
@@ -16,7 +16,7 @@ vi.mock("@/lib/forkAdminAuth", () => ({
 }));
 vi.mock("@/lib/localDb", () => ({
   getSettings: async () => db.settings,
-  updateSettings: async (patch) => { db.settings = { ...db.settings, ...patch }; },
+  updateSettings: async (patch) => { if (db.failUpdates) throw new Error("db down"); db.settings = { ...db.settings, ...patch }; },
   getProviderConnections: async () => db.connections,
   getComboByName: async (name) => db.settings.combos?.[name] || null,
 }));
@@ -43,6 +43,7 @@ const req = (method, { token = "secret-token", query = "" } = {}) =>
 
 beforeEach(() => {
   probeState.slow = false;
+  db.failUpdates = false;
   db.settings = {};
   db.connections = [];
   vi.stubEnv("ACCOUNT_MAX_INFLIGHT", "4");
@@ -136,5 +137,23 @@ describe("/api/fork/capacity-scan", () => {
     for (let i = 0; i < 50 && db.settings.capacityScan?.running; i++) await new Promise((r) => setTimeout(r, 10));
     expect(db.settings.capacityScan?.running).toBe(false);
     expect(db.settings.capacityScan?.lastResult).toMatchObject({ scanned: 0, detected: 0 });
+  });
+});
+
+// Review minor 9: a fire-and-forget scan that rejects must not vanish.
+describe("/api/fork/capacity-scan minor 9", () => {
+  it("warns when the fire-and-forget scan rejects", async () => {
+    db.settings = { capacityScan: { enabled: true }, diagnosticModels: { "conn-1": ["m1"] } };
+    db.connections = [{ id: "conn-1", provider: "glm", isActive: true }];
+    db.failUpdates = true; // the running-persist write throws → the scan rejects
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const started = await POST(req("POST"));
+      expect(await started.json()).toEqual({ started: true });
+      await new Promise((r) => setTimeout(r, 20)); // let the rejection land
+      expect(warn).toHaveBeenCalledWith(expect.stringMatching(/CAPACITY/), expect.anything());
+    } finally {
+      warn.mockRestore();
+    }
   });
 });

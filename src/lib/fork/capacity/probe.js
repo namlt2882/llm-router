@@ -59,7 +59,7 @@ export async function probeConnectionModel({ provider, connection, model, maxLev
 
   for (const level of levels) {
     const outcome = await runLevel(level);
-    if (outcome.unsupported) return UNSUPPORTED;
+    if (outcome.unsupported) return { ...UNSUPPORTED, requests };
     if (outcome.failed) { hi = level; failInfo = outcome.failed; break; }
     lo = level;
   }
@@ -81,7 +81,7 @@ export async function probeConnectionModel({ provider, connection, model, maxLev
     const mid = lo + Math.floor((hi - lo) / 2);
     if (mid <= lo || mid >= hi) break;
     const outcome = await runLevel(mid);
-    if (outcome.unsupported) return UNSUPPORTED;
+    if (outcome.unsupported) return { ...UNSUPPORTED, requests };
     if (outcome.failed) { hi = mid; failInfo = outcome.failed; } else { lo = mid; }
   }
 

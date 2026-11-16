@@ -104,6 +104,17 @@ async function runCapacityScanLocked({
   const state = settings?.capacityScan && typeof settings.capacityScan === "object" ? settings.capacityScan : {};
   if (state.running) return { ...(state.lastResult || {}), alreadyRunning: true };
 
+  // Operator knobs (review minor 3): settings win when they parse; the dep
+  // default applies otherwise. maxLevel caps the probe's ramp (values >32 are
+  // naturally capped — the ramp itself tops out at 32); parallelism is capped
+  // so a fat-fingered value cannot stampede every upstream at once.
+  const maxLevelSetting = Number.parseInt(state.maxLevel, 10);
+  const maxLevel = Number.isFinite(maxLevelSetting) && maxLevelSetting >= 1 ? maxLevelSetting : 32;
+  const parallelismSetting = Number.parseInt(state.parallelism, 10);
+  const poolSize = Number.isFinite(parallelismSetting) && parallelismSetting >= 1
+    ? Math.min(parallelismSetting, 16)
+    : Math.max(1, Number(parallelism) || 4);
+
   const startedAt = new Date(now()).toISOString();
   // Persist running BEFORE any probe so a crash mid-scan is visible; the
   // stale-running rule in isDue clears it on a later tick.
@@ -122,7 +133,7 @@ async function runCapacityScanLocked({
 
   const connections = (await getConnectionsDep({})).filter(isActiveConnection);
   const tasks = [];
-  for (let connection of connections) {
+  for (const connection of connections) {
     const provider = connection.provider;
     const models = resolveDiagnosticModels(connection, settings?.diagnosticModels);
     if (!models.length) { skipped += 1; tally(provider, "no diagnostic models"); continue; }
@@ -132,44 +143,57 @@ async function runCapacityScanLocked({
     if (getInflightDep(connection.id) > 0) {
       skipped += 1; tally(provider, "busy (inflight > 0)"); continue;
     }
+    tasks.push({ provider, connection, models });
+  }
+
+  // One task per CONNECTION: the refresh rides the worker pool (review minor
+  // 5 — a slow refresh no longer delays every later connection's probes).
+  const runTask = async ({ provider, connection, models }) => {
     // Credential prep: the exact refresh the live chat path runs. It RETURNS
     // the refreshed creds (and persists them) — the probe must use the
     // returned object, or an expired OAuth token is refreshed and then
     // probed with the stale copy (401 every day). A failed refresh marks the
     // whole connection unknown (auth) — its models are not probed and any
     // previous detected value stands.
+    let fresh = connection;
     try {
-      connection = await refreshDep(provider, connection);
+      fresh = await refreshDep(provider, connection);
     } catch {
       unknown += models.length;
       tally(provider, "auth");
-      continue;
+      return;
+    }
+    // Re-check busy at probe time (review minor 4): traffic that arrived
+    // while this task waited in the pool would read LOW and then govern
+    // routing for a day — skip instead, next scan tries again.
+    if (getInflightDep(fresh.id) > 0) {
+      skipped += 1;
+      tally(provider, "busy (inflight > 0)");
+      return;
     }
     scanned += 1;
-    for (const model of models) tasks.push({ provider, connection, model });
-  }
-
-  const runTask = async ({ provider, connection, model }) => {
-    let result;
-    try {
-      result = await probeFn({ provider, connection, model });
-    } catch (e) {
-      result = { status: "unreachable", reason: String(e?.message || e) };
-    }
-    probeRequests += Number.isInteger(result.requests) ? result.requests : 0;
-    if (result.status === "ok" && Number.isInteger(result.budget) && result.budget >= 1) {
-      detectedBudgets[connection.id] = detectedBudgets[connection.id] || {};
-      detectedBudgets[connection.id][model] = { budget: result.budget, detectedAt: new Date(now()).toISOString() };
-      detected += 1;
-    } else {
-      // keep the previous detected value; only a measurement moves it
-      unknown += 1;
-      tally(provider, result.status === "unsupported" ? "unsupported provider" : String(result.status || "unknown"));
+    for (const model of models) {
+      let result;
+      try {
+        result = await probeFn({ provider, connection: fresh, model, maxLevel });
+      } catch (e) {
+        result = { status: "unreachable", reason: String(e?.message || e) };
+      }
+      probeRequests += Number.isInteger(result.requests) ? result.requests : 0;
+      if (result.status === "ok" && Number.isInteger(result.budget) && result.budget >= 1) {
+        detectedBudgets[fresh.id] = detectedBudgets[fresh.id] || {};
+        detectedBudgets[fresh.id][model] = { budget: result.budget, detectedAt: new Date(now()).toISOString() };
+        detected += 1;
+      } else {
+        // keep the previous detected value; only a measurement moves it
+        unknown += 1;
+        tally(provider, result.status === "unsupported" ? "unsupported provider" : String(result.status || "unknown"));
+      }
     }
   };
   // simple worker pool over the task list
   let next = 0;
-  const workers = Array.from({ length: Math.max(1, Math.min(parallelism, tasks.length)) }, async () => {
+  const workers = Array.from({ length: Math.max(1, Math.min(poolSize, tasks.length)) }, async () => {
     while (next < tasks.length) {
       const task = tasks[next++];
       await runTask(task);
@@ -195,7 +219,9 @@ async function runCapacityScanLocked({
   try {
     const fresh = await getSettingsDep();
     if (fresh?.capacityScan && typeof fresh.capacityScan === "object") freshState = fresh.capacityScan;
-  } catch { /* a failed re-read falls back to the start snapshot */ }
+  } catch (e) {
+    console.warn("[CAPACITY] final settings re-read failed; using start snapshot:", e?.message || e);
+  }
   await updateSettingsDep({
     detectedBudgets,
     capacityScan: { ...freshState, running: false, lastRunAt: new Date(finishedAt).toISOString(), lastResult, nextRunAt: new Date(finishedAt + intervalHours * HOUR_MS).toISOString() },
@@ -227,7 +253,11 @@ async function schedulerTick(rawDeps) {
   if (!isDue(state, Date.now())) return;
   try {
     await runCapacityScan(deps);
-  } catch { /* the stale-running rule recovers a crashed scan on a later tick */ }
+  } catch (e) {
+    // the stale-running rule recovers a crashed scan on a later tick, but a
+    // persistently failing scan must at least be visible in the logs
+    console.warn("[CAPACITY] scheduled scan failed:", e?.message || e);
+  }
 }
 
 /**

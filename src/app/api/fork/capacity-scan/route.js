@@ -85,6 +85,6 @@ export async function POST(request) {
   }
   // Fire-and-forget: the scan itself persists its running flag before the
   // first probe, so a follow-up GET/POST observes it immediately.
-  runCapacityScan().catch(() => {});
+  runCapacityScan().catch((e) => console.warn("[CAPACITY] scan failed:", e?.message || e));
   return NextResponse.json({ started: true }, { headers: NO_STORE });
 }

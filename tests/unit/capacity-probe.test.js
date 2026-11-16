@@ -107,10 +107,10 @@ describe("probeConnectionModel", () => {
     expect((await probeConnectionModel({ ...TASK, dispatch })).status).toBe("unreachable");
   });
 
-  it("an unsupported provider type stops after one call", async () => {
+  it("an unsupported provider type stops after one call and still counts it (review minor 6)", async () => {
     const dispatch = fakeUpstream({ limit: 0, fail: () => ({ ok: false, unsupported: true }) });
     const result = await probeConnectionModel({ ...TASK, dispatch });
-    expect(result).toEqual({ status: "unsupported", reason: "provider type not supported for probing" });
+    expect(result).toEqual({ status: "unsupported", reason: "provider type not supported for probing", requests: 1 });
     expect(dispatch.calls()).toBe(1);
   });
 
