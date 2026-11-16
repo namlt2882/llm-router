@@ -21,7 +21,7 @@ import ConnectionRow from "./ConnectionRow";
 import DiagnosticModelsPicker from "./DiagnosticModelsPicker";
 import { nextCapacityScanEnabled } from "./capacity-scan-enabled.js";
 import { diagnosticModelOptions } from "./diagnostic-model-options.js";
-import { providerDetectedRows } from "./provider-detected.js";
+import { providerDetectedRows, capacityLabel } from "./provider-detected.js";
 import { capacityPollDecision } from "../../combos/capacity-poll.js";
 import AddApiKeyModal from "./AddApiKeyModal";
 import EditCompatibleNodeModal from "./EditCompatibleNodeModal";
@@ -1951,13 +1951,7 @@ export default function ProviderDetailPage() {
                       <span className="min-w-0 truncate text-[9px] italic text-text-muted/70" title={row.connName}>{row.connName}</span>
                     </span>
                     <span className="whitespace-nowrap text-text-muted">
-                      {row.unbounded
-                        ? (row.applied
-                          ? <>chưa chạm giới hạn ở {row.budget} · áp dụng tối đa {row.applied} phiên</>
-                          : <>chưa chạm giới hạn ở {row.budget}</>)
-                        : (row.applied && row.applied < row.budget
-                          ? <>~{row.budget} phiên song song · áp dụng {row.applied}</>
-                          : <>~{row.budget} phiên song song</>)}
+                      {capacityLabel(row)}
                       {row.detectedAt && (
                         <span title={row.detectedAt}> · {new Date(row.detectedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>
                       )}

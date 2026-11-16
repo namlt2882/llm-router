@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { providerDetectedRows } from "../../src/app/(dashboard)/dashboard/providers/[id]/provider-detected.js";
+import { providerDetectedRows, capacityLabel } from "../../src/app/(dashboard)/dashboard/providers/[id]/provider-detected.js";
 
 // Per-provider measured values on the provider card: rows collected from the
 // provider-keyed entry and every connection of this provider, sorted
@@ -103,5 +103,18 @@ describe("providerDetectedRows", () => {
   it("per-key rows have no applied cap (their budget IS the cap)", () => {
     const rows = providerDetectedRows({ providerId: "glm", connections, detectedBudgets: { "c-1": { a: { budget: 32 } } } });
     expect(rows[0].applied).toBeUndefined();
+  });
+});
+
+describe("capacityLabel", () => {
+  it("a keyless lane row shows only the applied cap, never the measured 16/32", () => {
+    expect(capacityLabel({ budget: 16, unbounded: false, applied: 6 })).toBe("áp dụng tối đa 6 phiên song song");
+    expect(capacityLabel({ budget: 32, unbounded: true, applied: 6 })).toBe("áp dụng tối đa 6 phiên song song");
+    expect(capacityLabel({ budget: 3, unbounded: false, applied: 3 })).toBe("áp dụng tối đa 3 phiên song song");
+  });
+
+  it("a per-key row keeps its measurement (a floor when unbounded)", () => {
+    expect(capacityLabel({ budget: 5, unbounded: false })).toBe("~5 phiên song song");
+    expect(capacityLabel({ budget: 32, unbounded: true })).toBe("chưa chạm giới hạn ở 32");
   });
 });

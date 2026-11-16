@@ -38,3 +38,15 @@ export function providerDetectedRows({ providerId, connections, detectedBudgets,
   });
   return rows;
 }
+
+/**
+ * Card text for one measured row. A keyless lane row (it carries `applied`)
+ * shows only the cap the router really enforces: its measurement is a free
+ * lane's time allowance in disguise and would only confuse next to the cap.
+ * @param {{budget: number, unbounded?: boolean, applied?: number}} row
+ * @returns {string}
+ */
+export function capacityLabel(row) {
+  if (row.applied) return `áp dụng tối đa ${row.applied} phiên song song`;
+  return row.unbounded ? `chưa chạm giới hạn ở ${row.budget}` : `~${row.budget} phiên song song`;
+}
