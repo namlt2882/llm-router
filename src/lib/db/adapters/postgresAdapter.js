@@ -45,6 +45,7 @@ export const PRIMARY_KEYS = {
   usageHistory: ["id"],
   usageDaily: ["dateKey"],
   requestDetails: ["id"],
+  concurrencySamples: ["id"],
 };
 
 const primaryKeyFor = (table) => PRIMARY_KEYS[table] ?? null;
@@ -277,6 +278,14 @@ async function resyncSequences(client) {
     );
   } catch {
     // Table may not exist yet on a partial client; the next boot retries.
+  }
+  try {
+    await client.query(
+      "SELECT setval(pg_get_serial_sequence('concurrencySamples', 'id'), " +
+      "COALESCE((SELECT MAX(id) FROM concurrencySamples), 1))",
+    );
+  } catch {
+    // Same partial-client rule as above.
   }
 }
 

@@ -60,7 +60,12 @@ export function columnsFromMigrations(sqlTexts) {
  * text contract, or as a failed `bigserial` insert.
  */
 export function expectedMirrorType(table, column) {
-  return table.toLowerCase() === "usagehistory" && column.toLowerCase() === "id" ? "bigserial" : "text";
+  const t = table.toLowerCase();
+  const c = column.toLowerCase();
+  // The two append-only sample/log tables keep real sequences in Postgres:
+  // rows are never updated, and an id the reader never queries by still has
+  // to be a real sequence or an insert without an id would allocate nothing.
+  return c === "id" && (t === "usagehistory" || t === "concurrencysamples") ? "bigserial" : "text";
 }
 
 /** table -> Map(column -> declared type), lower-cased, same sources as above. */
@@ -216,7 +221,7 @@ describe("goose migrations stay in step with schema.js", () => {
     const declared = declaredIndexes();
     expect(inMigrations.filter((n) => !declared.includes(n))).toEqual([]);
     // Pinned: adding one here is a deliberate change, not drift that slipped in.
-    expect(inMigrations).toEqual([]);
+    expect(inMigrations).toEqual(["idx_concurrency_ts"]);
   });
 
   it("finds an index in both places when one is added", () => {
