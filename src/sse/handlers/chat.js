@@ -9,6 +9,7 @@ import {
 } from "../services/auth.js";
 import { parsePriority } from "../services/accountInflight.js";
 import { fanoutCtxForEntry } from "../services/fanoutBudget.js";
+import { orderModelsByHeadroom, rememberServedModel } from "../services/fanoutModels.js";
 import { handleAntigravityQuotaError, clearAntigravityStrikes } from "../services/antigravityQuota.js";
 import { getSettings } from "@/lib/localDb";
 import { getModelInfo, getComboModels } from "../services/model.js";
@@ -148,14 +149,36 @@ export async function handleChat(request, clientRawRequest = null) {
 
     const comboStickyLimit = settings.comboStickyRoundRobinLimit;
     const comboCfg = comboStrategies[modelStr] || {};
-    log.info("CHAT", `Combo "${modelStr}" with ${augmentedModels.length} models (strategy: ${comboStrategy}, sticky: ${comboStickyLimit})`);
+    // Fork patch #22: a fanout combo tries the emptiest lane's model first
+    // instead of always starting at model 1. The pick is reserved until the
+    // first attempt returns so a concurrent burst spreads.
+    let orderedModels = augmentedModels;
+    let releaseOrder = () => {};
+    if (fanoutCfg) {
+      const ordered = await orderModelsByHeadroom({
+        models: augmentedModels, comboName: modelStr, sessionId, fanoutCtx: fanoutCfg, getModelInfo,
+      });
+      orderedModels = ordered.models;
+      releaseOrder = ordered.release;
+    }
+    const attempt = (b, m) => handleSingleModelChat(b, m, clientRawRequest, request, apiKey, null, sessionId, fanoutCfg);
+    let released = false;
+    const attemptOrdered = fanoutCfg
+      ? async (b, m) => {
+          try {
+            const result = await attempt(b, m);
+            if (result?.ok) rememberServedModel(modelStr, sessionId, m);
+            return result;
+          } finally {
+            if (!released) { released = true; releaseOrder(); }
+          }
+        }
+      : attempt;
+    log.info("CHAT", `Combo "${modelStr}" with ${orderedModels.length} models (strategy: ${comboStrategy}, sticky: ${comboStickyLimit})`);
     return handleComboChat({
       body,
-      models: augmentedModels,
-      handleSingleModel: withCapacityAdapterStripping(
-        (b, m) => handleSingleModelChat(b, m, clientRawRequest, request, apiKey, null, sessionId, fanoutCfg),
-        adapterAdded
-      ),
+      models: orderedModels,
+      handleSingleModel: withCapacityAdapterStripping(attemptOrdered, adapterAdded),
       log,
       comboName: modelStr,
       comboStrategy,
