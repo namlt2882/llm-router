@@ -90,6 +90,7 @@ export default function ProviderDetailPage() {
   const [detectedBudgets, setDetectedBudgets] = useState({});
   const [keylessMaxInflight, setKeylessMaxInflight] = useState(null);
   const [providerScanRunning, setProviderScanRunning] = useState(false);
+  const [quotaRecheck, setQuotaRecheck] = useState([]);
   const [scheduleConnection, setScheduleConnection] = useState(null);
   const [suggestedModels, setSuggestedModels] = useState([]);
   const [liveModels, setLiveModels] = useState([]);
@@ -360,6 +361,7 @@ export default function ProviderDetailPage() {
       setDiagnosticModels(settingsData.diagnosticModels || {});
       setDetectedBudgets(settingsData.detectedBudgets && typeof settingsData.detectedBudgets === "object" ? settingsData.detectedBudgets : {});
       setKeylessMaxInflight(settingsData.keylessMaxInflight ?? null);
+      setQuotaRecheck(Array.isArray(settingsData.quotaRecheck) ? settingsData.quotaRecheck : []);
       if (nodesRes.ok) {
         let node = (nodesData.nodes || []).find((entry) => entry.id === providerId) || null;
 
@@ -534,6 +536,7 @@ export default function ProviderDetailPage() {
       const settingsData = settingsRes.ok ? await settingsRes.json() : {};
       setDetectedBudgets(settingsData.detectedBudgets && typeof settingsData.detectedBudgets === "object" ? settingsData.detectedBudgets : {});
       setKeylessMaxInflight(settingsData.keylessMaxInflight ?? null);
+      setQuotaRecheck(Array.isArray(settingsData.quotaRecheck) ? settingsData.quotaRecheck : []);
     } catch (error) {
       console.log("Error refreshing detected budgets:", error);
     }
@@ -1960,6 +1963,20 @@ export default function ProviderDetailPage() {
                 ))}
               </div>
             );
+          })()}
+          {(() => {
+            // A live quota collapse scheduled this provider's lane for an
+            // automatic re-check — show when, in the operator's timezone.
+            const laneIds = new Set(connections.filter((c) => c?.provider === providerId).map((c) => c.id));
+            if (isFreeNoAuth) laneIds.add(providerId);
+            const times = (quotaRecheck || [])
+              .filter((entry) => entry && laneIds.has(entry.connectionId))
+              .map((entry) => new Date(entry.at))
+              .filter((d) => !Number.isNaN(d.getTime()))
+              .sort((a, b) => a - b);
+            if (!times.length) return null;
+            const when = times[0].toLocaleTimeString("vi-VN", { hour: "2-digit", minute: "2-digit", timeZone: "Asia/Ho_Chi_Minh" });
+            return <p className="mt-2 text-xs text-amber-600 dark:text-amber-400">Hết hạn mức — tự kiểm tra lúc {when}</p>;
           })()}
         </div>
       </Card>

@@ -123,6 +123,12 @@ export async function GET(request) {
   }
   body.coverage = { providersConfigured, connectionsConfigured };
 
+  // Pending live-quota re-check queue (quotaCollapse): absent when none so the
+  // card can tell "nothing scheduled" from "scheduled".
+  if (Array.isArray(settings.quotaRecheck) && settings.quotaRecheck.length) {
+    body.quotaRecheck = settings.quotaRecheck;
+  }
+
   const comboName = new URL(request.url).searchParams.get("combo");
   if (comboName) {
     body.summary = await comboSummary(comboName, settings);

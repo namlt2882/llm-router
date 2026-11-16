@@ -79,6 +79,20 @@ describe("/api/fork/capacity-scan", () => {
       coverage: { providersConfigured: 1, connectionsConfigured: 1 },
     });
     expect(body.summary).toBeUndefined();
+    // no re-check queue in settings → the key is absent, not null/[]
+    expect(body.quotaRecheck).toBeUndefined();
+  });
+
+  it("GET exposes the pending quota re-check queue when settings carry one", async () => {
+    db.settings = {
+      capacityScan: { enabled: true },
+      quotaRecheck: [{ connectionId: "conn-1", provider: "glm", model: "m2", at: "2026-11-16T21:10:38.000Z" }],
+    };
+    db.connections = [{ id: "conn-1", provider: "glm", isActive: true }];
+    const res = await GET(req("GET"));
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.quotaRecheck).toEqual([{ connectionId: "conn-1", provider: "glm", model: "m2", at: "2026-11-16T21:10:38.000Z" }]);
   });
 
   it("?combo= sums effective budgets over leaf members (percent-scaled detected + untested global)", async () => {
