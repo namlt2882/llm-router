@@ -11,6 +11,7 @@ import { useModelCaps } from "@/shared/hooks/useModelCaps";
 import { aggregateComboCapabilities } from "open-sse/providers/capabilities.js";
 import { resolveProviderId, AI_PROVIDERS } from "@/shared/constants/providers";
 import { mergeStrategyPatch } from "./strategy-config.js";
+import { capacityPollDecision } from "./capacity-poll.js";
 
 // Validate combo name: only a-z, A-Z, 0-9, -, _
 const VALID_NAME_REGEX = /^[a-zA-Z0-9_.\-]+$/;
@@ -676,21 +677,22 @@ function ComboCard({ combo, getCaps, comboByName = {}, activeProviders = [], cop
     if (!isFanout) return undefined;
     let cancelled = false;
     let timer = null;
+    let failStreak = 0;
     const tick = async () => {
+      let decision;
       try {
         const res = await fetch(`/api/fork/capacity-scan?combo=${encodeURIComponent(combo.name)}`, { cache: "no-store" });
-        if (res.ok) {
-          const data = await res.json();
-          if (cancelled) return;
-          setScanState(data);
-          if (!data.running) setScanning(false);
-          else timer = setTimeout(tick, 5000);
-        } else if (!cancelled) {
-          setScanning(false);
-        }
+        const data = res.ok ? await res.json() : null;
+        if (cancelled) return;
+        if (data) setScanState(data);
+        decision = capacityPollDecision({ ok: res.ok, running: !!data?.running, failStreak });
       } catch {
-        if (!cancelled) setScanning(false);
+        decision = capacityPollDecision({ ok: false, running: true, failStreak });
       }
+      if (cancelled) return;
+      failStreak = decision.failStreak;
+      if (decision.action === "stop") setScanning(false);
+      else timer = setTimeout(tick, decision.delayMs);
     };
     tick();
     return () => { cancelled = true; if (timer) clearTimeout(timer); };

@@ -19,6 +19,7 @@ import PassthroughModelsSection from "./PassthroughModelsSection";
 import CompatibleModelsSection from "./CompatibleModelsSection";
 import ConnectionRow from "./ConnectionRow";
 import DiagnosticModelsPicker from "./DiagnosticModelsPicker";
+import { nextCapacityScanEnabled } from "./capacity-scan-enabled.js";
 import AddApiKeyModal from "./AddApiKeyModal";
 import EditCompatibleNodeModal from "./EditCompatibleNodeModal";
 import AddCustomModelModal from "./AddCustomModelModal";
@@ -493,13 +494,14 @@ export default function ProviderDetailPage() {
       const settingsData = settingsRes.ok ? await settingsRes.json() : {};
       const current = settingsData.diagnosticModels || {};
       const updated = { ...current };
-      const hadAny = Object.values(updated).some((v) => Array.isArray(v) && v.length > 0);
       if (Array.isArray(next) && next.length > 0) updated[key] = next;
       else delete updated[key];
-      const hasAny = Object.values(updated).some((v) => Array.isArray(v) && v.length > 0);
       const patch = { diagnosticModels: updated };
-      if (!hadAny && hasAny) {
-        patch.capacityScan = { ...(settingsData.capacityScan || {}), enabled: true };
+      // Enabled follows the map: first model turns the daily scan on,
+      // removing the last one turns it back off (review minor 8).
+      const enabled = nextCapacityScanEnabled(current, updated);
+      if (enabled !== undefined) {
+        patch.capacityScan = { ...(settingsData.capacityScan || {}), enabled };
       }
       setDiagnosticModels(updated);
       await fetch("/api/settings", {
