@@ -12,9 +12,13 @@ const unauthorized = () => NextResponse.json({ error: "Unauthorized" }, { status
 const isActiveConnection = (c) => c.isActive === true || c.isactive === "1";
 
 /**
- * Σ capacity over a combo's leaf members: for every active connection of each
+ * Capacity of a combo's leaf members: for every active connection of each
  * member's provider, the fanout budget that request would run at (manual
- * budget → percent×detected → global). Nested combos are counted, not summed
+ * budget → percent×detected → global). In-flight slots are counted per
+ * ACCOUNT (connection id, or provider id for a keyless lane), not per model,
+ * so every account counts once, at the highest budget any member gives it —
+ * summing per member would count one account once per model.
+ * Nested combos are counted, not summed
  * (their capacity is the max of their legs, and probing inside a combo is v2).
  */
 async function comboSummary(name, settings) {
@@ -26,7 +30,9 @@ async function comboSummary(name, settings) {
   const ctx = fanoutCtxForEntry(entry);
   const connections = (await getProviderConnections({})).filter(isActiveConnection);
 
-  let sum = 0, members = 0, nested = 0;
+  const lanes = new Map();
+  const lane = (id, limit) => lanes.set(id, Math.max(lanes.get(id) || 0, limit));
+  let members = 0, nested = 0;
   for (const member of combo.models) {
     if (!member.includes("/")) {
       if (await getComboByName(member)) nested += 1;
@@ -39,16 +45,18 @@ async function comboSummary(name, settings) {
     let counted = 0;
     for (const c of connections) {
       if (c.provider !== provider) continue;
-      sum += effectiveFanoutBudget(ctx, c.id, globalLimit, detected, model);
+      lane(c.id, effectiveFanoutBudget(ctx, c.id, globalLimit, detected, model));
       counted += 1;
     }
     // A keyless provider with no connections is served by ONE shared lane whose
     // account id is the provider id (auth.js) — count that lane.
     const providerId = resolveProviderId(provider);
     if (!counted && FREE_PROVIDERS[providerId]?.noAuth) {
-      sum += keylessLaneLimit(effectiveFanoutBudget(ctx, providerId, globalLimit, detected, model), settings);
+      lane(providerId, keylessLaneLimit(effectiveFanoutBudget(ctx, providerId, globalLimit, detected, model), settings));
     }
   }
+  let sum = 0;
+  for (const limit of lanes.values()) sum += limit;
   return { combo: name, sum, members, ...(nested ? { nested } : {}) };
 }
 

@@ -90,8 +90,8 @@ describe("/api/fork/capacity-scan", () => {
     db.connections = [{ id: "conn-1", provider: "glm", isActive: true }];
     const res = await GET(req("GET", { query: "?combo=combo-x" }));
     const body = await res.json();
-    // glm-4.5-flash: floor(5 × 0.8) = 4; untested: global 4 → Σ 8 over 2 members
-    expect(body.summary).toEqual({ combo: "combo-x", sum: 8, members: 2 });
+    // both members run on conn-1 and share its slot: max(floor(5 × 0.8) = 4, global 4) = 4, counted once
+    expect(body.summary).toEqual({ combo: "combo-x", sum: 4, members: 2 });
   });
 
   it("a keyless member (no connections) counts its provider-level lane: detected, else the global cap", async () => {
@@ -102,8 +102,8 @@ describe("/api/fork/capacity-scan", () => {
     };
     db.connections = [];
     const body = await (await GET(req("GET", { query: "?combo=combo-k" }))).json();
-    // big-pickle: detected 6; untested: global 4 → Σ 10 over 2 members
-    expect(body.summary).toEqual({ combo: "combo-k", sum: 10, members: 2 });
+    // one shared lane: max(detected 6, global 4) = 6, counted once
+    expect(body.summary).toEqual({ combo: "combo-k", sum: 6, members: 2 });
   });
 
   it("a keyless lane's contribution is clamped to the keyless ceiling (unbounded 32 counts 6)", async () => {
@@ -115,6 +115,18 @@ describe("/api/fork/capacity-scan", () => {
     db.connections = [];
     const body = await (await GET(req("GET", { query: "?combo=combo-u" }))).json();
     expect(body.summary).toEqual({ combo: "combo-u", sum: 6, members: 1 });
+  });
+
+  it("many models on one account share ONE slot pool: the lane counts once, at its highest limit", async () => {
+    db.settings = {
+      combos: { "combo-w": { models: ["glm/a", "glm/b", "glm/c", "opencode/m1", "opencode/m2", "opencode/m3"] } },
+      comboStrategies: { "combo-w": { fallbackStrategy: "fanout" } },
+      detectedBudgets: { opencode: { m1: { budget: 32, unbounded: true }, m2: { budget: 16 } } },
+    };
+    db.connections = [{ id: "conn-1", provider: "glm", isActive: true }];
+    const body = await (await GET(req("GET", { query: "?combo=combo-w" }))).json();
+    // glm: one account at global 4; opencode: one keyless lane, ceiling 6 → 10, not Σ over 6 members
+    expect(body.summary).toEqual({ combo: "combo-w", sum: 10, members: 6 });
   });
 
   it("a nested combo member is counted, not summed", async () => {
