@@ -20,6 +20,7 @@ import CompatibleModelsSection from "./CompatibleModelsSection";
 import ConnectionRow from "./ConnectionRow";
 import DiagnosticModelsPicker from "./DiagnosticModelsPicker";
 import { nextCapacityScanEnabled } from "./capacity-scan-enabled.js";
+import { diagnosticModelOptions } from "./diagnostic-model-options.js";
 import AddApiKeyModal from "./AddApiKeyModal";
 import EditCompatibleNodeModal from "./EditCompatibleNodeModal";
 import AddCustomModelModal from "./AddCustomModelModal";
@@ -174,6 +175,10 @@ export default function ProviderDetailPage() {
   const models = LIVE_MODEL_CATALOG_PROVIDERS.has(providerId) && liveModels.length > 0
     ? liveModels
     : applyQoderModelNames(staticModels, customModels, getProviderAlias(providerId));
+  // Patch #20: the diagnostic picker must offer the LIVE catalog too — opencode
+  // free's real models arrive via modelsFetcher as "suggested" and never
+  // reached the picker when only the 4-model static catalog was passed.
+  const diagOptions = diagnosticModelOptions(models, suggestedModels);
   const providerAlias = getProviderAlias(providerId);
   
   const isOpenAICompatible = isOpenAICompatibleProvider(providerId);
@@ -1120,7 +1125,7 @@ export default function ProviderDetailPage() {
                   scheduleSummary: getScheduleSlotLabels(autoPing.schedules?.[conn.id]).join(" / "),
                   onConfigure: () => setScheduleConnection(conn),
                 } : null}
-                diagnosticModelOptions={isCompatible ? models : null}
+                diagnosticModelOptions={isCompatible ? diagOptions : null}
                 diagnosticModels={isCompatible ? (diagnosticModels[conn.id] || []) : null}
                 onSaveDiagnosticModels={isCompatible ? (next) => saveDiagnosticModels(conn.id, next) : null}
                 onUpdateProxy={async (proxyPoolId) => {
@@ -1841,7 +1846,7 @@ export default function ProviderDetailPage() {
         <Card>
           <DiagnosticModelsPicker
             providerId={providerId}
-            models={models}
+            models={diagOptions}
             value={diagnosticModels[providerId] || []}
             onSave={(next) => saveDiagnosticModels(providerId, next)}
           />
