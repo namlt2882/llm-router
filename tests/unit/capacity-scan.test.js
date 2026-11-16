@@ -11,7 +11,8 @@ vi.mock("@/sse/services/accountInflight.js", () => ({ getInflightCount: () => 0 
 vi.mock("@/sse/services/tokenRefresh.js", () => ({ checkAndRefreshToken: async (_p, c) => c }));
 // probe.js resolves this at import; the scan tests inject probeFn so the
 // registry itself is never consulted.
-vi.mock("open-sse/providers/registry/index.js", () => ({ default: [] }));
+const registryEntries = vi.hoisted(() => []);
+vi.mock("open-sse/providers/registry/index.js", () => ({ default: registryEntries }));
 vi.mock("open-sse/executors/index.js", () => ({
   getExecutor: () => null,
   hasSpecializedExecutor: () => false,
@@ -415,5 +416,75 @@ describe("provider-scoped scan", () => {
     expect(env.probes).toEqual(["c-glm:m1"]);
     expect(res.skipped).toBe(1); // only the proxied glm connection
     expect(res.perProvider.every((p) => p.provider === "glm")).toBe(true);
+  });
+});
+
+// Keyless providers (opencode free) have no connection rows to iterate, yet
+// serve live traffic through the virtual "noauth" lane. The scan measures that
+// lane at PROVIDER level: one virtual connection {id: providerId}, result
+// stored at detectedBudgets[providerId][model].
+describe("keyless provider scan", () => {
+  const keyless = () => ["oc"];
+
+  it("measures a keyless provider with provider-level diagnostic models and no connections", async () => {
+    const env = makeEnv();
+    env.settings.diagnosticModels = { oc: ["m1"] };
+    const res = await runCapacityScan({ ...env.scanDeps(), keylessProviders: keyless });
+    expect(env.probes).toEqual(["oc:m1"]);
+    expect(env.refreshes).toEqual([]); // no credentials to refresh
+    expect(res.scanned).toBe(1);
+    expect(res.detected).toBe(1);
+    const finalWrite = env.updates[env.updates.length - 1];
+    expect(finalWrite.detectedBudgets.oc.m1.budget).toBe(5);
+  });
+
+  it("hands the probe a virtual connection carrying the provider id", async () => {
+    const env = makeEnv();
+    env.settings.diagnosticModels = { oc: ["m1"] };
+    let seen = null;
+    await runCapacityScan({ ...env.scanDeps(), keylessProviders: keyless, probeFn: async (a) => { seen = a; return { status: "ok", budget: 2, requests: 1 }; } });
+    expect(seen.provider).toBe("oc");
+    expect(seen.connection.id).toBe("oc");
+    expect(seen.connection.provider).toBe("oc");
+  });
+
+  it("a keyless provider with no diagnostic models is invisible — not skipped", async () => {
+    const env = makeEnv();
+    const res = await runCapacityScan({ ...env.scanDeps(), keylessProviders: keyless });
+    expect(env.probes).toEqual([]);
+    expect(res.skipped).toBe(0);
+    expect(res.scanned).toBe(0);
+  });
+
+  it("a scoped scan measures only its own provider (keyless or not)", async () => {
+    const env = makeEnv();
+    env.settings.diagnosticModels = { oc: ["m1"], glm: ["m2"] };
+    env.connections = [conn("c-glm", { provider: "glm" })];
+    await runCapacityScan({ ...env.scanDeps(), keylessProviders: keyless, provider: "oc" });
+    expect(env.probes).toEqual(["oc:m1"]);
+    env.probes.length = 0;
+    await runCapacityScan({ ...env.scanDeps(), keylessProviders: keyless, provider: "glm" });
+    expect(env.probes).toEqual(["c-glm:m2"]);
+  });
+
+  it("traffic on the keyless lane (inflight keyed by provider id) skips the probe", async () => {
+    const env = makeEnv();
+    env.settings.diagnosticModels = { oc: ["m1"] };
+    env.inflight.oc = 2;
+    const res = await runCapacityScan({ ...env.scanDeps(), keylessProviders: keyless });
+    expect(env.probes).toEqual([]);
+    expect(res.skipped).toBe(1);
+  });
+
+  it("the DEFAULT wiring derives keyless providers from the registry's noAuth entries", async () => {
+    registryEntries.push({ id: "oc", noAuth: true }, { id: "glm" });
+    try {
+      const env = makeEnv();
+      env.settings.diagnosticModels = { oc: ["m1"], glm: ["m2"] };
+      await runCapacityScan(env.scanDeps()); // no keylessProviders injected
+      expect(env.probes).toEqual(["oc:m1"]); // glm has no connection and is not keyless
+    } finally {
+      registryEntries.length = 0;
+    }
   });
 });

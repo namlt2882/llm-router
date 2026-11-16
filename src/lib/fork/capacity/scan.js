@@ -16,6 +16,7 @@
 import { checkAndRefreshToken } from "@/sse/services/tokenRefresh.js";
 import { getSettings, updateSettings, getProviderConnections } from "@/lib/localDb";
 import { getInflightCount } from "@/sse/services/accountInflight.js";
+import registry from "open-sse/providers/registry/index.js";
 import { probeConnectionModel, dispatchFor } from "./probe.js";
 
 const STALE_RUNNING_MS = 30 * 60 * 1000;
@@ -58,6 +59,16 @@ export function isDue(state, now, staleRunningMs = STALE_RUNNING_MS) {
 const isActiveConnection = (c) => c.isActive === true || c.isactive === "1";
 
 /**
+ * Providers served WITHOUT credentials (registry `noAuth`) — live traffic
+ * reaches them through the virtual "noauth" lane, so they have no connection
+ * rows for the scan to iterate. Read at call time so the registry stays the
+ * single source of truth.
+ * @returns {string[]}
+ */
+export const registryKeylessProviders = () =>
+  (Array.isArray(registry) ? registry : []).filter((p) => p?.noAuth === true && p.id).map((p) => p.id);
+
+/**
  * Run the whole system scan. All I/O injected; see the module doc for the
  * semantics. probeFn mirrors probeConnectionModel's signature and adds
  * `requests` (upstream dispatch count) to its result for the audit trail.
@@ -82,11 +93,12 @@ export async function runCapacityScan({
   now = () => Date.now(),
   parallelism = 4,
   provider = null,
+  keylessProviders = registryKeylessProviders,
 } = {}) {
   if (scanInFlight) return { alreadyRunning: true };
   scanInFlight = true;
   try {
-    return await runCapacityScanLocked({ getSettingsDep, updateSettingsDep, getConnectionsDep, getInflightDep, refreshDep, probeFn, now, parallelism, provider });
+    return await runCapacityScanLocked({ getSettingsDep, updateSettingsDep, getConnectionsDep, getInflightDep, refreshDep, probeFn, now, parallelism, provider, keylessProviders });
   } finally {
     scanInFlight = false;
   }
@@ -102,6 +114,7 @@ async function runCapacityScanLocked({
   now,
   parallelism,
   provider = null,
+  keylessProviders,
 }) {
   const settings = await getSettingsDep();
   const state = settings?.capacityScan && typeof settings.capacityScan === "object" ? settings.capacityScan : {};
@@ -154,9 +167,25 @@ async function runCapacityScanLocked({
     tasks.push({ provider, connection, models });
   }
 
+  // Keyless providers: no connection rows exist, so measure the shared lane at
+  // PROVIDER level — one virtual connection {id: providerId}, stored under
+  // detectedBudgets[providerId]. A provider that also has real connections is
+  // measured per key above instead (capacity is per key, never aggregated).
+  // Providers with no diagnostic models are invisible, not skipped.
+  const connectedProviders = new Set(connections.map((c) => c.provider));
+  for (const pid of new Set(keylessProviders())) {
+    if (provider && pid !== provider) continue;
+    if (connectedProviders.has(pid)) continue;
+    const dm = settings?.diagnosticModels?.[pid];
+    const models = Array.isArray(dm) ? [...new Set(dm.filter((m) => typeof m === "string" && m))] : [];
+    if (!models.length) continue;
+    if (getInflightDep(pid) > 0) { skipped += 1; tally(pid, "busy (inflight > 0)"); continue; }
+    tasks.push({ provider: pid, connection: { id: pid, provider: pid, isActive: true }, models, keyless: true });
+  }
+
   // One task per CONNECTION: the refresh rides the worker pool (review minor
   // 5 — a slow refresh no longer delays every later connection's probes).
-  const runTask = async ({ provider, connection, models }) => {
+  const runTask = async ({ provider, connection, models, keyless = false }) => {
     // Credential prep: the exact refresh the live chat path runs. It RETURNS
     // the refreshed creds (and persists them) — the probe must use the
     // returned object, or an expired OAuth token is refreshed and then
@@ -165,7 +194,7 @@ async function runCapacityScanLocked({
     // previous detected value stands.
     let fresh = connection;
     try {
-      fresh = await refreshDep(provider, connection);
+      if (!keyless) fresh = await refreshDep(provider, connection); // keyless: no credentials to refresh
     } catch {
       unknown += models.length;
       tally(provider, "auth");
