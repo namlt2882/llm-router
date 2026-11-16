@@ -24,6 +24,7 @@ import { isModelLockActive } from "open-sse/services/accountFallback.js";
 import { resolveProviderId, FREE_PROVIDERS } from "@/shared/constants/providers.js";
 import { getStickyComboModel, setStickyComboModel } from "open-sse/services/systemoneRouter.js";
 import { accountInflightLimit, getInflightCount } from "./accountInflight.js";
+import * as log from "../utils/logger.js";
 import { effectiveFanoutBudget, keylessLaneLimit, parseFanoutCtx } from "./fanoutBudget.js";
 
 // A reservation covers the gap between ordering and the first attempt; the TTL
@@ -111,6 +112,7 @@ export async function orderModelsByHeadroom({ models, comboName, sessionId, fano
     }
   }
 
+  log.info("FANOUT", `${comboName} order: ${ordered.map((r) => `${r.model}(${r.ratio.toFixed(2)})`).join(" > ")}`);
   const first = ordered[0];
   const token = { lane: first.lane, expires: Date.now() + RESERVATION_TTL_MS };
   if (first.ratio >= 0) reservations.add(token);
