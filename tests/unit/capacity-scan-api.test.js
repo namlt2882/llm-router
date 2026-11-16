@@ -129,6 +129,34 @@ describe("/api/fork/capacity-scan", () => {
     expect(body.summary).toEqual({ combo: "combo-w", sum: 10, members: 6 });
   });
 
+  it("?combo= resolves a member's alias prefix to the canonical provider id", async () => {
+    // Combo members store the UI alias (`ocg/beam-free`); a connection stores
+    // the provider id (`opencode-go`). Comparing them raw finds no connection,
+    // so a measured combo reported sum 0 — "no parameters" on its card.
+    db.settings = {
+      combos: { "opencode-go": { models: ["ocg/beam-free", "ocg/longcat-2.5-free"] } },
+      comboStrategies: { "opencode-go": { fallbackStrategy: "fanout" } },
+      detectedBudgets: {
+        "conn-oc": { "beam-free": { budget: 32, unbounded: true }, "longcat-2.5-free": { budget: 16 } },
+      },
+    };
+    db.connections = [{ id: "conn-oc", provider: "opencode-go", isActive: true }];
+    const body = await (await GET(req("GET", { query: "?combo=opencode-go" }))).json();
+    // one shared account: max(32, 16) = 32, counted once
+    expect(body.summary).toEqual({ combo: "opencode-go", sum: 32, members: 2 });
+  });
+
+  it("?combo= also matches a connection whose provider was stored as an alias", async () => {
+    db.settings = {
+      combos: { "combo-alias": { models: ["opencode-go/m1"] } },
+      comboStrategies: { "combo-alias": { fallbackStrategy: "fanout" } },
+      detectedBudgets: { "conn-oc": { m1: { budget: 8 } } },
+    };
+    db.connections = [{ id: "conn-oc", provider: "ocg", isActive: true }];
+    const body = await (await GET(req("GET", { query: "?combo=combo-alias" }))).json();
+    expect(body.summary).toEqual({ combo: "combo-alias", sum: 8, members: 1 });
+  });
+
   it("a nested combo member is counted, not summed", async () => {
     db.settings = {
       combos: {

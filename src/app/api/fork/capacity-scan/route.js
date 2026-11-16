@@ -39,18 +39,21 @@ async function comboSummary(name, settings) {
       continue;
     }
     const idx = member.indexOf("/");
-    const provider = member.slice(0, idx);
+    // Members store whatever the operator picked — usually the UI alias
+    // (`ocg/beam-free`), while a connection stores the canonical provider id
+    // (`opencode-go`). Compare canonically on BOTH sides or a measured combo
+    // reports sum 0 ("no parameters") while its models have budgets.
+    const providerId = resolveProviderId(member.slice(0, idx));
     const model = member.slice(idx + 1);
     members += 1;
     let counted = 0;
     for (const c of connections) {
-      if (c.provider !== provider) continue;
+      if (resolveProviderId(c.provider) !== providerId) continue;
       lane(c.id, effectiveFanoutBudget(ctx, c.id, globalLimit, detected, model));
       counted += 1;
     }
     // A keyless provider with no connections is served by ONE shared lane whose
     // account id is the provider id (auth.js) — count that lane.
-    const providerId = resolveProviderId(provider);
     if (!counted && FREE_PROVIDERS[providerId]?.noAuth) {
       lane(providerId, keylessLaneLimit(effectiveFanoutBudget(ctx, providerId, globalLimit, detected, model), settings));
     }
