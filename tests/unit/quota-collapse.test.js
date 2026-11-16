@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { matchesQuotaHints } from "../../src/lib/fork/capacity/classifyError.js";
 import { handleLiveQuotaError, parseResetsIn } from "../../src/sse/services/quotaCollapse.js";
+import { markAccountUnavailable } from "../../src/sse/services/auth.js";
 
 // In-memory settings — quotaCollapse resolves the same "@/lib/localDb" module,
 // so its writes land in this map (vi.mock is hoisted above every import).
@@ -8,6 +9,16 @@ const db = vi.hoisted(() => ({ settings: {} }));
 vi.mock("@/lib/localDb", () => ({
   getSettings: async () => db.settings,
   updateSettings: async (patch) => { db.settings = { ...db.settings, ...patch }; },
+  getProviderConnections: async (query = {}) =>
+    (db.settings.providerConnections || []).filter((c) => !query.provider || c.provider === query.provider),
+  updateProviderConnection: async (id, patch) => {
+    const rows = db.settings.providerConnections || [];
+    const row = rows.find((c) => c.id === id);
+    if (row) Object.assign(row, patch);
+    return row;
+  },
+  validateApiKey: async () => null,
+  getProxyPools: async () => [],
 }));
 
 describe("matchesQuotaHints", () => {
@@ -68,5 +79,23 @@ describe("handleLiveQuotaError", () => {
     await handleLiveQuotaError({ connectionId: "c1", provider: "glm", model: "m1", errorText: "error 1308", resetsAtMs: Date.now() + 7200000 });
     expect(db.settings.quotaRecheck).toHaveLength(2);
     expect(db.settings.quotaRecheck.filter((e) => e.connectionId === "c1")).toHaveLength(1);
+  });
+});
+
+describe("markAccountUnavailable funnels into the live collapse", () => {
+  beforeEach(() => { db.settings = {}; });
+
+  it("a quota error on a real connection collapses it; a plain 500 does not", async () => {
+    db.settings = { providerConnections: [{ id: "c1", provider: "opencode-go", isActive: true, data: "{}" }] };
+    await markAccountUnavailable("c1", 429, "GoUsageLimitError resets in 2h", "opencode-go", "m1");
+    expect(db.settings.detectedBudgets.c1.m1.budget).toBe(0);
+    db.settings = { providerConnections: db.settings.providerConnections };
+    await markAccountUnavailable("c1", 500, "internal error", "opencode-go", "m1");
+    expect(db.settings.detectedBudgets).toBeUndefined();
+  });
+
+  it("a keyless lane id still collapses under the provider key (before the early return)", async () => {
+    await markAccountUnavailable("opencode", 429, "GoUsageLimitError resets in 2h", "opencode", "big-pickle");
+    expect(db.settings.detectedBudgets.opencode["big-pickle"].budget).toBe(0);
   });
 });

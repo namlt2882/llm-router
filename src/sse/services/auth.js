@@ -18,6 +18,11 @@ import {
   getUpstreamWaitMs,
 } from "./accountInflight.js";
 import * as log from "../utils/logger.js";
+// Live-traffic quota collapse (Part 1 of the 2026-11-16 concurrency design):
+// every failure funneling through markAccountUnavailable squeezes a quota-ed
+// (connection, model) lane to 0 immediately, best-effort — never let the
+// collapse turn an error path into a crash.
+import { handleLiveQuotaError } from "./quotaCollapse.js";
 // Fork patch #19: combo-scoped fanout — per-account budgets + headroom ranking.
 import { parseFanoutCtx, effectiveFanoutBudget, rankFanout, keylessLaneLimit } from "./fanoutBudget.js";
 
@@ -423,6 +428,14 @@ const EXACT_RESET_PROVIDERS = new Set(["antigravity", "glm", "glm-cn"]);
  * @returns {{ shouldFallback: boolean, cooldownMs: number }}
  */
 export async function markAccountUnavailable(connectionId, status, errorText, provider = null, model = null, resetsAtMs = null) {
+  // Live quota collapse runs BEFORE the keyless early return: a keyless lane's
+  // connectionId is the provider id, which is exactly the detectedBudgets key
+  // the scan writes for it, so keyless lanes collapse like any other.
+  try {
+    await handleLiveQuotaError({ connectionId, provider, model, errorText, resetsAtMs });
+  } catch (e) {
+    log.warn("AUTH", "quota collapse failed:", e?.message);
+  }
   if (!connectionId || isKeylessLaneId(connectionId)) return { shouldFallback: false, cooldownMs: 0 };
   const connections = await getProviderConnections({ provider });
   const conn = connections.find(c => c.id === connectionId);
