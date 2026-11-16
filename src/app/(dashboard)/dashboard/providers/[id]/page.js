@@ -1913,7 +1913,7 @@ export default function ProviderDetailPage() {
         )}
         <div data-testid="provider-detected">
           <div className="mb-2 flex items-center justify-between gap-2">
-            <span className="text-sm font-medium">Hạn mức đã đo</span>
+            <span className="text-sm font-medium">Hạn mức đã đo (theo key)</span>
             <Button size="sm" onClick={runProviderScan} disabled={providerScanRunning}>
               {providerScanRunning ? (
                 <>
@@ -1926,9 +1926,13 @@ export default function ProviderDetailPage() {
           {(() => {
             const detectedRows = providerDetectedRows({ providerId, connections, detectedBudgets });
             if (!detectedRows.length) {
-              return (
+              return connections.length === 0 ? (
                 <p className="text-xs text-text-muted">
-                  Chưa có số đo — chọn model chuẩn đoán rồi bấm &quot;Chạy chuẩn đoán&quot;.
+                  Provider này chưa có connection (key) nào — hạn mức theo key chỉ đo được khi có key.
+                </p>
+              ) : (
+                <p className="text-xs text-text-muted">
+                  Chưa có số đo cho key nào — chọn model chuẩn đoán rồi bấm &quot;Chạy chuẩn đoán&quot;.
                 </p>
               );
             }
@@ -1941,7 +1945,7 @@ export default function ProviderDetailPage() {
                   >
                     <span className="flex min-w-0 items-baseline gap-1.5">
                       <code className="min-w-0 truncate rounded bg-sidebar px-1.5 py-0.5 font-mono text-xs text-text-muted" title={row.model}>{row.model}</code>
-                      {row.connName && <span className="min-w-0 truncate text-[9px] italic text-text-muted/70" title={row.connName}>{row.connName}</span>}
+                      <span className="min-w-0 truncate text-[9px] italic text-text-muted/70" title={row.connName}>{row.connName}</span>
                     </span>
                     <span className="whitespace-nowrap text-text-muted">
                       ~{row.budget} phiên song song

@@ -11,22 +11,23 @@ describe("providerDetectedRows", () => {
     { id: "c-x", provider: "oc", name: "Other" },
   ];
 
-  it("collects provider-keyed and per-connection entries", () => {
+  it("collects ONLY per-key (connection) entries — no provider aggregate", () => {
+    // Steve's ruling: two keys can have different subscriptions, so the
+    // measured capacity is per key. The scan never writes a provider-keyed
+    // detectedBudgets entry and nothing reads one — the card must not
+    // surface an aggregate row that no budget ever comes from.
     const detectedBudgets = {
       glm: { "glm-5.3-flash": { budget: 5, detectedAt: "2026-11-16T03:32:03.984Z" } },
       "c-1": { "glm-5.3-flash": { budget: 4, detectedAt: "2026-11-16T04:00:00.000Z" } },
+      "c-2": { "glm-5.3-flash": { budget: 8, detectedAt: "2026-11-16T04:01:00.000Z" } },
       "c-x": { "m": { budget: 9, detectedAt: "2026-11-16T04:00:00.000Z" } },
     };
     const rows = providerDetectedRows({ providerId: "glm", connections, detectedBudgets });
-    // per-connection rows (specific) come first; the provider-level fallback
-    // row last — its connId is the settings key itself (the provider id).
-    expect(rows.map((r) => [r.connId, r.model, r.budget])).toEqual([
-      ["c-1", "glm-5.3-flash", 4],
-      ["glm", "glm-5.3-flash", 5],
+    expect(rows.map((r) => [r.connId, r.connName, r.model, r.budget])).toEqual([
+      ["c-2", "Key 2", "glm-5.3-flash", 8],
+      ["c-1", "Nam", "glm-5.3-flash", 4],
     ]);
-    expect(rows[0].detectedAt).toBe("2026-11-16T04:00:00.000Z");
-    expect(rows[0].connName).toBe("Nam");
-    expect(rows[1].connName).toBeNull();
+    expect(rows[0].detectedAt).toBe("2026-11-16T04:01:00.000Z");
   });
 
   it("sorts by connection name then model", () => {
@@ -36,14 +37,13 @@ describe("providerDetectedRows", () => {
       glm: { "m": { budget: 5, detectedAt: "x" } },
     };
     const rows = providerDetectedRows({ providerId: "glm", connections, detectedBudgets });
-    expect(rows.map((r) => `${r.connName || "provider"}/${r.model}`)).toEqual([
+    expect(rows.map((r) => `${r.connName}/${r.model}`)).toEqual([
       "Key 2/a-model",
       "Key 2/b-model",
       "Nam/m",
-      "provider/m",
     ]);
     // connections alphabetical by name, models alphabetical within a
-    // connection, provider-level fallback row last
+    // connection; the provider-keyed entry ("glm") produces NO row
   });
 
   it("returns [] when nothing was detected for this provider", () => {
