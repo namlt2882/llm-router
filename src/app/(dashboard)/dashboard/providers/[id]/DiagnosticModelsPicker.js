@@ -53,7 +53,12 @@ export default function DiagnosticModelsPicker({ providerId, connectionId = null
                   onChange={() => toggle(id)}
                   className="h-4 w-4 rounded border-gray-300 text-primary focus:ring-primary"
                 />
-                <span className="min-w-0 truncate" title={id}>{name}</span>
+                <span className="flex min-w-0 items-baseline gap-1.5">
+                  <code className="min-w-0 truncate rounded bg-sidebar px-1.5 py-0.5 font-mono text-xs text-text-muted" title={id}>{id}</code>
+                  {name && name !== id && (
+                    <span className="min-w-0 truncate text-[9px] italic text-text-muted/70" title={name}>{name}</span>
+                  )}
+                </span>
               </label>
             );
           })}
