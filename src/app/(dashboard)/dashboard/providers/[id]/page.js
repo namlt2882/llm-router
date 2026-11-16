@@ -21,6 +21,8 @@ import ConnectionRow from "./ConnectionRow";
 import DiagnosticModelsPicker from "./DiagnosticModelsPicker";
 import { nextCapacityScanEnabled } from "./capacity-scan-enabled.js";
 import { diagnosticModelOptions } from "./diagnostic-model-options.js";
+import { providerDetectedRows } from "./provider-detected.js";
+import { capacityPollDecision } from "../../combos/capacity-poll.js";
 import AddApiKeyModal from "./AddApiKeyModal";
 import EditCompatibleNodeModal from "./EditCompatibleNodeModal";
 import AddCustomModelModal from "./AddCustomModelModal";
@@ -85,6 +87,8 @@ export default function ProviderDetailPage() {
   const [thinkingMode, setThinkingMode] = useState("auto");
   const [autoPing, setAutoPing] = useState({ enabled: false, connections: {}, schedules: {} });
   const [diagnosticModels, setDiagnosticModels] = useState({});
+  const [detectedBudgets, setDetectedBudgets] = useState({});
+  const [providerScanRunning, setProviderScanRunning] = useState(false);
   const [scheduleConnection, setScheduleConnection] = useState(null);
   const [suggestedModels, setSuggestedModels] = useState([]);
   const [liveModels, setLiveModels] = useState([]);
@@ -353,6 +357,7 @@ export default function ProviderDetailPage() {
       setAutoPing({ enabled: apCfg.enabled === true, connections: apCfg.connections || {}, schedules: apCfg.schedules || {} });
       // Patch #20 capacity scan: per provider/connection diagnostic models
       setDiagnosticModels(settingsData.diagnosticModels || {});
+      setDetectedBudgets(settingsData.detectedBudgets && typeof settingsData.detectedBudgets === "object" ? settingsData.detectedBudgets : {});
       if (nodesRes.ok) {
         let node = (nodesData.nodes || []).find((entry) => entry.id === providerId) || null;
 
@@ -516,6 +521,59 @@ export default function ProviderDetailPage() {
       });
     } catch (error) {
       console.log("Error saving diagnostic models:", error);
+    }
+  };
+
+  // Light re-read of just the measured budgets (after a scan finishes) — the
+  // full fetchConnections would also reload connections/nodes/pools.
+  const refreshDetected = async () => {
+    try {
+      const settingsRes = await fetch("/api/settings", { cache: "no-store" });
+      const settingsData = settingsRes.ok ? await settingsRes.json() : {};
+      setDetectedBudgets(settingsData.detectedBudgets && typeof settingsData.detectedBudgets === "object" ? settingsData.detectedBudgets : {});
+    } catch (error) {
+      console.log("Error refreshing detected budgets:", error);
+    }
+  };
+
+  // Scoped diagnostic run for THIS provider only (the daily schedule of the
+  // system-wide scan is untouched). One scan at a time system-wide: a 409 just
+  // means another scan is running — poll it and pick up the results anyway.
+  const runProviderScan = async () => {
+    if (providerScanRunning) return;
+    setProviderScanRunning(true);
+    let failStreak = 0;
+    const tick = async () => {
+      let decision;
+      try {
+        const st = await fetch("/api/fork/capacity-scan", { cache: "no-store" });
+        const state = st.ok ? await st.json() : {};
+        decision = capacityPollDecision({ ok: st.ok, running: state.running === true, failStreak });
+      } catch {
+        decision = capacityPollDecision({ ok: false, running: true, failStreak });
+      }
+      failStreak = decision.failStreak;
+      if (decision.action === "stop") {
+        setProviderScanRunning(false);
+        await refreshDetected();
+        return;
+      }
+      setTimeout(tick, decision.delayMs);
+    };
+    try {
+      const res = await fetch("/api/fork/capacity-scan", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ provider: providerId }),
+      });
+      if (!res.ok && res.status !== 409) {
+        setProviderScanRunning(false);
+        return;
+      }
+      setTimeout(tick, 1500);
+    } catch (error) {
+      console.log("Error starting provider scan:", error);
+      setProviderScanRunning(false);
     }
   };
 
@@ -1841,17 +1899,63 @@ export default function ProviderDetailPage() {
       {/* Per-provider user overrides (custom headers / connect timeout) */}
       <CustomConfigCard providerId={providerId} />
 
-      {/* Patch #20: capacity auto-detect — diagnostic models for the daily scan */}
-      {!isCompatible && (
-        <Card>
-          <DiagnosticModelsPicker
-            providerId={providerId}
-            models={diagOptions}
-            value={diagnosticModels[providerId] || []}
-            onSave={(next) => saveDiagnosticModels(providerId, next)}
-          />
-        </Card>
-      )}
+      {/* Patch #20: capacity auto-detect — diagnostic models + measured values */}
+      <Card>
+        {!isCompatible && (
+          <div className="mb-4 border-b border-border pb-4">
+            <DiagnosticModelsPicker
+              providerId={providerId}
+              models={diagOptions}
+              value={diagnosticModels[providerId] || []}
+              onSave={(next) => saveDiagnosticModels(providerId, next)}
+            />
+          </div>
+        )}
+        <div data-testid="provider-detected">
+          <div className="mb-2 flex items-center justify-between gap-2">
+            <span className="text-sm font-medium">Hạn mức đã đo</span>
+            <Button size="sm" onClick={runProviderScan} disabled={providerScanRunning}>
+              {providerScanRunning ? (
+                <>
+                  <span className="material-symbols-outlined mr-1 text-sm" style={{ animation: "spin 1s linear infinite" }}>progress_activity</span>
+                  Đang quét…
+                </>
+              ) : "Chạy chuẩn đoán"}
+            </Button>
+          </div>
+          {(() => {
+            const detectedRows = providerDetectedRows({ providerId, connections, detectedBudgets });
+            if (!detectedRows.length) {
+              return (
+                <p className="text-xs text-text-muted">
+                  Chưa có số đo — chọn model chuẩn đoán rồi bấm &quot;Chạy chuẩn đoán&quot;.
+                </p>
+              );
+            }
+            return (
+              <div className="overflow-hidden rounded-md border border-border">
+                {detectedRows.map((row) => (
+                  <div
+                    key={`${row.connId}/${row.model}`}
+                    className="flex items-center justify-between gap-2 border-b border-border px-2 py-1.5 text-xs last:border-b-0"
+                  >
+                    <span className="flex min-w-0 items-baseline gap-1.5">
+                      <code className="min-w-0 truncate rounded bg-sidebar px-1.5 py-0.5 font-mono text-xs text-text-muted" title={row.model}>{row.model}</code>
+                      {row.connName && <span className="min-w-0 truncate text-[9px] italic text-text-muted/70" title={row.connName}>{row.connName}</span>}
+                    </span>
+                    <span className="whitespace-nowrap text-text-muted">
+                      ~{row.budget} phiên song song
+                      {row.detectedAt && (
+                        <span title={row.detectedAt}> · {new Date(row.detectedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>
+                      )}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            );
+          })()}
+        </div>
+      </Card>
 
       {/* Models */}
       <Card>

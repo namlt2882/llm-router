@@ -83,8 +83,17 @@ export async function POST(request) {
   if (settings?.capacityScan?.running === true) {
     return NextResponse.json({ started: false, running: true }, { status: 409, headers: NO_STORE });
   }
+  // Optional { provider } — the provider card's own "Chạy chuẩn đoán" runs a
+  // scoped diagnostic (only that provider's connections, daily schedule kept).
+  let provider = null;
+  try {
+    const body = await request.json();
+    if (typeof body?.provider === "string" && body.provider) provider = body.provider;
+  } catch {
+    // bodyless POST = the full system scan
+  }
   // Fire-and-forget: the scan itself persists its running flag before the
   // first probe, so a follow-up GET/POST observes it immediately.
-  runCapacityScan().catch((e) => console.warn("[CAPACITY] scan failed:", e?.message || e));
-  return NextResponse.json({ started: true }, { headers: NO_STORE });
+  runCapacityScan({ provider }).catch((e) => console.warn("[CAPACITY] scan failed:", e?.message || e));
+  return NextResponse.json({ started: true, ...(provider ? { provider } : {}) }, { headers: NO_STORE });
 }

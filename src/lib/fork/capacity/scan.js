@@ -80,11 +80,12 @@ export async function runCapacityScan({
   probeFn = ({ provider, connection, model, maxLevel }) => probeConnectionModel({ provider, connection, model, maxLevel }),
   now = () => Date.now(),
   parallelism = 4,
+  provider = null,
 } = {}) {
   if (scanInFlight) return { alreadyRunning: true };
   scanInFlight = true;
   try {
-    return await runCapacityScanLocked({ getSettingsDep, updateSettingsDep, getConnectionsDep, getInflightDep, refreshDep, probeFn, now, parallelism });
+    return await runCapacityScanLocked({ getSettingsDep, updateSettingsDep, getConnectionsDep, getInflightDep, refreshDep, probeFn, now, parallelism, provider });
   } finally {
     scanInFlight = false;
   }
@@ -99,6 +100,7 @@ async function runCapacityScanLocked({
   probeFn,
   now,
   parallelism,
+  provider = null,
 }) {
   const settings = await getSettingsDep();
   const state = settings?.capacityScan && typeof settings.capacityScan === "object" ? settings.capacityScan : {};
@@ -131,7 +133,12 @@ async function runCapacityScanLocked({
 
   let scanned = 0, detected = 0, skipped = 0, unknown = 0, probeRequests = 0;
 
-  const connections = (await getConnectionsDep({})).filter(isActiveConnection);
+  // Provider-scoped run (the provider card's own "Chạy chuẩn đoán"): the
+  // filter applies BEFORE the skip tallies — out-of-scope connections are
+  // invisible, and the result describes only the scoped provider.
+  const connections = (await getConnectionsDep({}))
+    .filter(isActiveConnection)
+    .filter((c) => !provider || c.provider === provider);
   const tasks = [];
   for (const connection of connections) {
     const provider = connection.provider;
@@ -207,6 +214,7 @@ async function runCapacityScanLocked({
     : 24;
   const lastResult = {
     scanned, detected, skipped, unknown, probeRequests,
+    ...(provider ? { provider } : {}),
     perProvider: [...reasonCounts.entries()].map(([key, count]) => {
       const [provider, reason] = key.split("|");
       return { provider, reason, count };
@@ -222,9 +230,14 @@ async function runCapacityScanLocked({
   } catch (e) {
     console.warn("[CAPACITY] final settings re-read failed; using start snapshot:", e?.message || e);
   }
+  // A provider-scoped run is a manual diagnostic, not a daily tick: it keeps
+  // the fresh state's lastRunAt/nextRunAt (the full scan owns the schedule)
+  // and only clears running + records its labeled result.
   await updateSettingsDep({
     detectedBudgets,
-    capacityScan: { ...freshState, running: false, lastRunAt: new Date(finishedAt).toISOString(), lastResult, nextRunAt: new Date(finishedAt + intervalHours * HOUR_MS).toISOString() },
+    capacityScan: provider
+      ? { ...freshState, running: false, lastResult }
+      : { ...freshState, running: false, lastRunAt: new Date(finishedAt).toISOString(), lastResult, nextRunAt: new Date(finishedAt + intervalHours * HOUR_MS).toISOString() },
   });
   return lastResult;
 }

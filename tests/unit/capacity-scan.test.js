@@ -361,3 +361,55 @@ describe("review minor 9: scan failures are not silent", () => {
     }
   });
 });
+
+// Per-provider diagnostic run (follow-up): the provider card gets its own
+// "Chạy chuẩn đoán" button — the scan must then touch ONLY that provider's
+// connections and must NOT move the daily schedule (lastRunAt/nextRunAt stay
+// the full scan's; a manual provider probe is not a daily tick).
+describe("provider-scoped scan", () => {
+  it("probes only the matching provider's connections and labels the result", async () => {
+    const env = makeEnv();
+    env.settings.diagnosticModels = { glm: ["m1"], oc: ["m2"] };
+    env.connections = [conn("c-glm", { provider: "glm" }), conn("c-oc", { provider: "oc" })];
+    const res = await runCapacityScan({ ...env.scanDeps(), provider: "glm" });
+    expect(env.probes).toEqual(["c-glm:m1"]);
+    expect(res.provider).toBe("glm");
+    expect(res.scanned).toBe(1);
+    expect(res.skipped).toBe(0);
+    expect(res.detected).toBe(1);
+  });
+
+  it("leaves lastRunAt/nextRunAt of the daily schedule untouched", async () => {
+    const env = makeEnv();
+    env.settings.capacityScan = {
+      enabled: true,
+      lastRunAt: "2026-01-01T00:00:00.000Z",
+      nextRunAt: "2026-01-02T00:00:00.000Z",
+    };
+    env.settings.diagnosticModels = { glm: ["m1"] };
+    env.connections = [conn("c-glm")];
+    await runCapacityScan({ ...env.scanDeps(), provider: "glm" });
+    const finalWrite = env.updates[env.updates.length - 1];
+    expect(finalWrite.capacityScan.lastRunAt).toBe("2026-01-01T00:00:00.000Z");
+    expect(finalWrite.capacityScan.nextRunAt).toBe("2026-01-02T00:00:00.000Z");
+    expect(finalWrite.capacityScan.running).toBe(false);
+    expect(finalWrite.capacityScan.lastResult.provider).toBe("glm");
+    expect(finalWrite.detectedBudgets["c-glm"].m1.budget).toBe(5);
+  });
+
+  it("out-of-scope connections are invisible — not skipped", async () => {
+    const env = makeEnv();
+    // oc has diagnostic models configured too — a scoped scan must not count
+    // it in skipped (the result describes the scoped provider only).
+    env.settings.diagnosticModels = { glm: ["m1"], oc: ["m2"], "c-glm-proxied": ["m3"] };
+    env.connections = [
+      conn("c-glm", { provider: "glm" }),
+      conn("c-oc", { provider: "oc" }),
+      conn("c-glm-proxied", { provider: "glm", providerSpecificData: { connectionProxyEnabled: true } }),
+    ];
+    const res = await runCapacityScan({ ...env.scanDeps(), provider: "glm" });
+    expect(env.probes).toEqual(["c-glm:m1"]);
+    expect(res.skipped).toBe(1); // only the proxied glm connection
+    expect(res.perProvider.every((p) => p.provider === "glm")).toBe(true);
+  });
+});

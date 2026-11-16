@@ -173,3 +173,51 @@ describe("/api/fork/capacity-scan knob forwarding", () => {
     expect(probeState.calls[0]?.maxLevel).toBe(4);
   });
 });
+
+describe("POST { provider } — per-provider diagnostic run", () => {
+  it("scans only that provider and leaves the daily schedule untouched", async () => {
+    db.settings = {
+      capacityScan: { enabled: true, lastRunAt: "2026-01-01T00:00:00.000Z", nextRunAt: "2026-01-02T00:00:00.000Z" },
+      diagnosticModels: { glm: ["m1"], oc: ["m2"] },
+    };
+    db.connections = [
+      { id: "c-glm", provider: "glm", isActive: true },
+      { id: "c-oc", provider: "oc", isActive: true },
+    ];
+    const res = await POST(new Request("http://router/api/fork/capacity-scan", {
+      method: "POST",
+      headers: { authorization: "Bearer secret-token" },
+      body: JSON.stringify({ provider: "glm" }),
+    }));
+    expect(res.status).toBe(200);
+    for (let i = 0; i < 100 && probeState.calls.length < 1; i++) await new Promise((r) => setTimeout(r, 10));
+    expect(probeState.calls.map((c) => c.connection.id)).toEqual(["c-glm"]);
+    for (let i = 0; i < 100 && db.settings.capacityScan?.running; i++) await new Promise((r) => setTimeout(r, 10));
+    expect(db.settings.capacityScan.running).toBe(false);
+    expect(db.settings.capacityScan.lastResult.provider).toBe("glm");
+    // the daily schedule belongs to the full scan — untouched
+    expect(db.settings.capacityScan.lastRunAt).toBe("2026-01-01T00:00:00.000Z");
+    expect(db.settings.capacityScan.nextRunAt).toBe("2026-01-02T00:00:00.000Z");
+    expect(db.settings.detectedBudgets["c-glm"].m1.budget).toBe(4);
+    expect(db.settings.detectedBudgets["c-oc"]).toBeUndefined();
+  });
+
+  it("409s while ANY scan (also a full one) is running — one scan at a time", async () => {
+    db.settings = { diagnosticModels: { glm: ["m1"] } };
+    db.connections = [{ id: "c-glm", provider: "glm", isActive: true }];
+    probeState.slow = true;
+    const first = await POST(req("POST"));
+    expect(first.status).toBe(200);
+    for (let i = 0; i < 100 && !db.settings.capacityScan?.running; i++) await new Promise((r) => setTimeout(r, 10));
+    const scoped = await POST(new Request("http://router/api/fork/capacity-scan", {
+      method: "POST",
+      headers: { authorization: "Bearer secret-token" },
+      body: JSON.stringify({ provider: "glm" }),
+    }));
+    expect(scoped.status).toBe(409);
+    probeState.slow = false;
+    probeState.release?.();
+    for (let i = 0; i < 100 && db.settings.capacityScan?.running; i++) await new Promise((r) => setTimeout(r, 10));
+    expect(db.settings.capacityScan.running).toBe(false);
+  });
+});
