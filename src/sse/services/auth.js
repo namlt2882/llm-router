@@ -398,6 +398,8 @@ async function selectProviderCredentials(provider, excludeConnectionIds = null, 
   }
 }
 
+const EXACT_RESET_PROVIDERS = new Set(["antigravity", "glm", "glm-cn"]);
+
 /**
  * Mark account+model as unavailable — locks modelLock_${model} in DB.
  * All errors (429, 401, 5xx, etc.) lock per model, not per account.
@@ -425,8 +427,8 @@ export async function markAccountUnavailable(connectionId, status, errorText, pr
     newBackoffLevel = 0;
   } else if (resetsAtMs && resetsAtMs > Date.now()) {
     shouldFallback = true;
-    // Antigravity quota API provides exact per-model resetAt. Do not truncate it.
-    cooldownMs = resolveProviderId(provider) === "antigravity"
+    // Antigravity quota API and GLM's 5-hour window give an exact reset. Do not truncate it.
+    cooldownMs = EXACT_RESET_PROVIDERS.has(resolveProviderId(provider))
       ? resetsAtMs - Date.now()
       : Math.min(resetsAtMs - Date.now(), MAX_RATE_LIMIT_COOLDOWN_MS);
     newBackoffLevel = 0;

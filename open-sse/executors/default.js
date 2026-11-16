@@ -90,9 +90,27 @@ const REFRESH_GRANTS = Object.fromEntries(
     })
 );
 
+// Z.ai / BigModel report window exhaustion as 429 code 1308 with a wall-clock reset in UTC+8.
+const GLM_PROVIDERS = new Set(["glm", "glm-cn"]);
+const GLM_RESET_RE = /reset at (\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}:\d{2})/i;
+
 export class DefaultExecutor extends BaseExecutor {
   constructor(provider) {
     super(provider, PROVIDERS[provider] || PROVIDERS.openai);
+  }
+
+  parseError(response, bodyText) {
+    if (GLM_PROVIDERS.has(this.provider) && response.status === 429 && bodyText) {
+      try {
+        const err = JSON.parse(bodyText)?.error;
+        const match = String(err?.code) === "1308" && typeof err.message === "string" && err.message.match(GLM_RESET_RE);
+        if (match) {
+          const ms = new Date(`${match[1]}T${match[2]}+08:00`).getTime();
+          if (Number.isFinite(ms)) return { status: 429, message: err.message, resetsAtMs: ms };
+        }
+      } catch { /* fall through to default */ }
+    }
+    return super.parseError(response, bodyText);
   }
 
   transformRequest(model, body, stream, credentials) {
