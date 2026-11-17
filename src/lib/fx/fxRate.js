@@ -62,9 +62,17 @@ export async function maybeRefreshFxRates({ fetchImpl, now = Date.now() } = {}) 
   return true;
 }
 
+/** FX_MARGIN_PCT sets the deployment default; an unusable value is ignored, never trusted. */
+function envMarginPct() {
+  const raw = process.env.FX_MARGIN_PCT;
+  if (!raw || raw.trim() === "") return DEFAULT_MARGIN_PCT;
+  const n = Number(raw);
+  return Number.isFinite(n) && n >= 0 && n <= 0.5 ? n : DEFAULT_MARGIN_PCT;
+}
+
 export async function getMarginPct() {
   const v = await kv.get("margin", null);
-  return typeof v === "number" && v >= 0 && v <= 0.5 ? v : DEFAULT_MARGIN_PCT;
+  return typeof v === "number" && v >= 0 && v <= 0.5 ? v : envMarginPct();
 }
 
 export async function setMarginPct(pct) {

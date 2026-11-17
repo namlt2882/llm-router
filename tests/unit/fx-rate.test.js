@@ -49,6 +49,29 @@ afterEach(() => {
   fs.rmSync(tempDir, { recursive: true, force: true });
 });
 
+describe("fx margin default from FX_MARGIN_PCT", () => {
+  it("uses the env value when no margin was saved", async () => {
+    vi.stubEnv("FX_MARGIN_PCT", "0.05");
+    const { getMarginPct } = await load();
+    expect(await getMarginPct()).toBe(0.05);
+  });
+
+  it("falls back to 0.02 for an unset, malformed or out-of-range env value", async () => {
+    for (const bad of ["", "abc", "-0.1", "0.9"]) {
+      vi.stubEnv("FX_MARGIN_PCT", bad);
+      const { getMarginPct } = await load();
+      expect(await getMarginPct(), bad).toBe(0.02);
+    }
+  });
+
+  it("lets a margin saved by the admin win over the env default", async () => {
+    vi.stubEnv("FX_MARGIN_PCT", "0.05");
+    const { getMarginPct, setMarginPct } = await load();
+    await setMarginPct(0.1);
+    expect(await getMarginPct()).toBe(0.1);
+  });
+});
+
 describe("fx floor rate", () => {
   it("is the highest fresh source times 1.02", async () => {
     const { refreshFxRates, getFloorRate } = await load();
