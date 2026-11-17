@@ -66,6 +66,20 @@ describe("getConcurrencyChartData", () => {
     expect(await usageRepo.getConcurrencyChartData("all")).toEqual([]); // no usageDaily rows in a fresh dir
   });
 
+  it("samples inserted out of ts order bucket identically (order-independent math)", async () => {
+    const { usageRepo } = await loadRepo();
+    const base = Date.now() - 2.5 * 3600000;
+    // Insertion order deliberately differs from ts order — the bucketing must
+    // not care (the two-pointer refactor sorts; findIndex never did).
+    await usageRepo.recordConcurrencySample(7, 9, { now: new Date(base + 3600000) }); // bucket B first
+    await usageRepo.recordConcurrencySample(2, 10, { now: new Date(base) });          // bucket A
+    await usageRepo.recordConcurrencySample(4, 10, { now: new Date(base + 60000) });  // bucket A
+    const out = await usageRepo.getConcurrencyChartData("24h");
+    expect(out).toHaveLength(24);
+    const concurrencySum = out.reduce((s, b) => s + (b.concurrency || 0), 0);
+    expect(concurrencySum).toBeCloseTo((2 + 4) / 2 + 7, 6);
+  });
+
   it("empty table → zeroed buckets with null rates, never NaN", async () => {
     const { usageRepo } = await loadRepo();
     const out = await usageRepo.getConcurrencyChartData("7d");

@@ -97,6 +97,9 @@ export default function ConcurrencyChart({ period = "7d" }) {
               width={54}
               tickFormatter={fmtTokens}
             />
+            {/* Cost gets its own hidden scale: sharing the token axis flattened
+                the line onto zero (USD is orders of magnitude below tokens). */}
+            <YAxis yAxisId="cost" orientation="right" hide domain={[0, "auto"]} />
             <Tooltip
               contentStyle={{
                 backgroundColor: "var(--color-bg)",
@@ -116,7 +119,7 @@ export default function ConcurrencyChart({ period = "7d" }) {
             <Bar yAxisId="left" dataKey="concurrency" name="Phiên đồng thời (TB)" fill="#6366f1" fillOpacity={0.7} />
             <Line yAxisId="left" dataKey="utilityRate" name="% hạn mức" stroke="#14b8a6" strokeWidth={2} connectNulls={false} dot={false} />
             <Line yAxisId="right" dataKey="cumulativeTokens" name="Token luỹ kế" stroke="#f59e0b" strokeWidth={2} dot={false} />
-            <Line yAxisId="right" dataKey="cumulativeCost" name="Chi phí luỹ kế" stroke="#ef4444" strokeWidth={2} dot={false} />
+            <Line yAxisId="cost" dataKey="cumulativeCost" name="Chi phí luỹ kế" stroke="#ef4444" strokeWidth={2} dot={false} />
           </ComposedChart>
         </ResponsiveContainer>
       )}

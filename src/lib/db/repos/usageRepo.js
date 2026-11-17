@@ -832,15 +832,22 @@ export async function getConcurrencyChartData(period = "7d") {
   const inflightSum = new Array(buckets.length).fill(0);
   const budgetSum = new Array(buckets.length).fill(0);
   const sampleCount = new Array(buckets.length).fill(0);
-  for (const s of db.all("SELECT ts, inflight, totalBudget FROM concurrencySamples WHERE ts >= ?", [windowStart])) {
-    const t = new Date(s.ts).getTime();
-    if (Number.isNaN(t) || t < buckets[0].start) continue;
-    // Contiguous ascending buckets: the FIRST bucket whose end passes t is the one containing it.
-    const idx = buckets.findIndex((b) => t < b.end);
-    if (idx < 0) continue;
-    inflightSum[idx] += Number(s.inflight) || 0;
-    budgetSum[idx] += Number(s.totalBudget) || 0;
-    sampleCount[idx] += 1;
+  // Samples walked with a monotonic bucket pointer — findIndex per sample was
+  // O(samples × buckets) and the table grows toward 60d ≈ 173k rows (review
+  // minor M3). Sort first: the storage layer makes no ordering promise.
+  const samples = db.all("SELECT ts, inflight, totalBudget FROM concurrencySamples WHERE ts >= ?", [windowStart])
+    .map((s) => ({ t: new Date(s.ts).getTime(), inflight: Number(s.inflight) || 0, budget: Number(s.totalBudget) || 0 }))
+    .filter((r) => !Number.isNaN(r.t) && r.t >= buckets[0].start)
+    .sort((a, b) => a.t - b.t);
+  let sIdx = 0;
+  for (let b = 0; b < buckets.length && sIdx < samples.length; b += 1) {
+    // Contiguous ascending buckets: everything below b.end belongs to b.
+    while (sIdx < samples.length && samples[sIdx].t < buckets[b].end) {
+      inflightSum[b] += samples[sIdx].inflight;
+      budgetSum[b] += samples[sIdx].budget;
+      sampleCount[b] += 1;
+      sIdx += 1;
+    }
   }
 
   // Usage rows in the window, walked chronologically so each bucket carries

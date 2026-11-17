@@ -161,6 +161,40 @@ describe("processDueQuotaRecheck", () => {
     expect(db.settings.quotaRecheck).toEqual([]);
   });
 
+  it("writes nothing when the tick changed nothing (only-future queue)", async () => {
+    db.settings = { quotaRecheck: [entry({ at: new Date(NOW + 3600000).toISOString() })], providerConnections: conn() };
+    const writes = [];
+    const out = await processDueQuotaRecheck({
+      now: NOW,
+      probeFn: async () => { throw new Error("nothing due — must not probe"); },
+      updateSettingsFn: async (patch) => writes.push(patch),
+    });
+    expect(out).toEqual({ probed: 0, restored: 0, rescheduled: 0, dropped: 0 });
+    // Review minor M4: an unchanged queue must not churn the settings row
+    // every 60s (~1,380 identical writes across a 23h pending entry).
+    expect(writes).toEqual([]);
+  });
+
+  it("reschedules a quota-again verdict carrying an increasing reschedule count", async () => {
+    db.settings = { quotaRecheck: [entry({ reschedules: 7 })], providerConnections: conn() };
+    probe.results = [{ status: "quota", reason: "GoUsageLimitError resets in 3h", requests: 1 }];
+    const out = await run();
+    expect(out.rescheduled).toBe(1);
+    expect(db.settings.quotaRecheck[0].reschedules).toBe(8);
+  });
+
+  it("drops a lane after MAX consecutive quota-reschedules with no restore between them", async () => {
+    db.settings = { quotaRecheck: [entry({ reschedules: 8 })], providerConnections: conn() };
+    probe.results = [{ status: "quota", reason: "GoUsageLimitError resets in 5m", requests: 1 }];
+    // Review minor M5: a rolling-window quota whose resets are always short
+    // would reschedule forever (at keeps moving, the 24h staleness guard
+    // never fires) — the cap hands the lane back to the daily scan.
+    const out = await run();
+    expect(out.dropped).toBe(1);
+    expect(out.rescheduled).toBe(0);
+    expect(db.settings.quotaRecheck).toEqual([]);
+  });
+
   it("drops a stale entry (>24h past its time) and an entry whose connection vanished", async () => {
     db.settings = { quotaRecheck: [entry({ at: new Date(NOW - 25 * 3600000).toISOString() }), entry({ connectionId: "gone" })], providerConnections: conn() };
     const out = await run({ probeFn: async () => { throw new Error("must not probe stale/missing"); } });

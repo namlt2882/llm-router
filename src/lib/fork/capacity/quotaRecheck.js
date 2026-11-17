@@ -13,6 +13,9 @@
  * Outcome mapping:
  *   ok                     → restore + clear + drop the entry
  *   quota                  → fresh reset within horizon → reschedule; else drop
+ *                            (rescheduling caps at 8 consecutive verdicts —
+ *                            a rolling-window quota that never truly resets
+ *                            must not reschedule forever)
  *   unreachable|unknown|throttle → keep the entry, retry next tick
  *   auth|config|balance|unsupported → terminal for this key → drop
  * A stale entry (>24h past its time) and an entry whose connection vanished
@@ -29,6 +32,11 @@ const DEFAULT_MAX_PER_TICK = 5;
 const DEFAULT_HORIZON_MS = 24 * 60 * 60 * 1000;
 const TRANSIENT = new Set(["unreachable", "unknown", "throttle"]);
 const TERMINAL = new Set(["auth", "config", "balance", "unsupported"]);
+// A rolling-window quota whose stated resets are always short reschedules
+// this lane forever — `at` keeps moving, so the 24h staleness guard never
+// fires. Eight consecutive quota-verdict reschedules with no restore between
+// them hand the lane back to the daily scan (review minor M5).
+const MAX_CONSECUTIVE_RESCHEDULES = 8;
 
 const isKeylessLaneId = (id) => id === "noauth" || FREE_PROVIDERS[id]?.noAuth === true;
 
@@ -138,8 +146,9 @@ async function processDueQuotaRecheckInner(deps = {}) {
 
     if (status === "quota") {
       const duration = parseResetsIn(verdict?.reason);
-      if (duration && duration <= horizonMs) {
-        kept.push({ ...entry, at: new Date(now + duration).toISOString() });
+      const reschedules = Number.isFinite(Number(entry.reschedules)) ? Number(entry.reschedules) : 0;
+      if (duration && duration <= horizonMs && reschedules < MAX_CONSECUTIVE_RESCHEDULES) {
+        kept.push({ ...entry, at: new Date(now + duration).toISOString(), reschedules: reschedules + 1 });
         out.rescheduled += 1;
       } else {
         out.dropped += 1;
@@ -155,6 +164,11 @@ async function processDueQuotaRecheckInner(deps = {}) {
 
   // One write per tick, and the restored budgets ride the SAME patch: they
   // must persist through updateSettings or the lane never reopens (C1).
+  // Nothing due and nothing restored means the queue is byte-identical —
+  // rewriting it every 60s would churn the settings row ~1,380× per 23h
+  // pending entry (review minor M4). kept preserves queue order, so a
+  // string compare is an exact deep-equality here.
+  if (!restoredBudgets && JSON.stringify(kept) === JSON.stringify(queue)) return out;
   await updateSettingsFn({
     quotaRecheck: kept,
     ...(restoredBudgets ? { detectedBudgets: restoredBudgets } : {}),
