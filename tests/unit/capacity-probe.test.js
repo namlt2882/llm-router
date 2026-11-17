@@ -192,6 +192,24 @@ describe("makeDefaultDispatch", () => {
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 
+  it("a custom provider node (openai-compatible-*, connection baseUrl) is probeable via its own baseUrl", async () => {
+    // Custom nodes are not registry ids: their wire shape IS the generic
+    // openai POST at the connection's own baseUrl — the same shape the
+    // runtime chat path builds (default executor buildUrl). Without this the
+    // probe reports unsupported and the re-check scheduler drops the lane
+    // without ever touching the wire.
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify({ choices: [{ message: { content: "pong" } }] }), { status: 200 }));
+    const dispatch = makeDefaultDispatch({ fetchImpl });
+    const result = await dispatch({
+      provider: "openai-compatible-chat-1f4a7e22-9000-4a10-b001-fanout000001",
+      connection: { id: "c9", provider: "openai-compatible-chat-1f4a7e22-9000-4a10-b001-fanout000001", apiKey: "sk-fnt-a", providerSpecificData: { baseUrl: "http://localhost:9101/v1", apiType: "chat" } },
+      model: "stub-quota-model",
+    });
+    expect(result).toEqual({ ok: true });
+    expect(fetchImpl.mock.calls[0][0]).toBe("http://localhost:9101/v1/chat/completions");
+    expect(fetchImpl.mock.calls[0][1].headers.Authorization).toBe("Bearer sk-fnt-a");
+  });
+
   it("an unknown provider id is unsupported", async () => {
     const result = await makeDefaultDispatch({ fetchImpl: vi.fn() })({ provider: "acme", connection: baseConn, model: "m" });
     expect(result).toEqual({ ok: false, unsupported: true });

@@ -22,8 +22,14 @@ const SKIP = new Set(["src/sse/services/auth.js", "src/sse/handlers/chat.js"]);
 function walk(dir, out = []) {
   for (const entry of readdirSync(dir)) {
     const path = join(dir, entry);
-    if (statSync(path).isDirectory()) walk(path, out);
-    else if (path.endsWith(".js")) out.push(path);
+    if (statSync(path).isDirectory()) {
+      // Build output and dependencies are not source: a `next build` (output:
+      // "standalone") copies handler duplicates under src/.next/standalone/
+      // and the audit then reads pre-fix copies that never release the slot —
+      // one build after a green gate re-broke it (observed live 2026-11-17).
+      if (entry === ".next" || entry === "node_modules") continue;
+      walk(path, out);
+    } else if (path.endsWith(".js")) out.push(path);
   }
   return out;
 }

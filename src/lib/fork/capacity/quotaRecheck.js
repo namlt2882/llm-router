@@ -56,15 +56,16 @@ export function processDueQuotaRecheck(deps = {}) {
 async function processDueQuotaRecheckInner(deps = {}) {
   const {
     now = Date.now(),
-    // Same default as the scan's probe: dispatchFor(provider), NOT the bare
-    // call (which would fall back to makeDefaultDispatch()). Executor-backed
-    // providers — opencode free (TLS-ClientHello + forced streaming) and
-    // opencode-go (400 MissingSessionID on a session-less request) — are the
-    // GoUsageLimitError lanes this feature exists for, and the generic openai
-    // POST can never reach them; the bare call would make every such lane
-    // unprobeable and permanently closed until the daily scan.
-    probeFn = ({ provider, ...rest }) =>
-      probeConnectionModel({ provider, ...rest, dispatch: dispatchFor(provider) }),
+    // Same default as the scan's probe: dispatchFor(provider, connection),
+    // NOT the bare call (which would fall back to makeDefaultDispatch()).
+    // Executor-backed providers — opencode free (TLS-ClientHello + forced
+    // streaming) and opencode-go (400 MissingSessionID on a session-less
+    // request) — are the GoUsageLimitError lanes this feature exists for,
+    // and the generic openai POST can never reach them; custom nodes
+    // (openai-compatible-*) are the opposite: no registry entry, no
+    // executor, probeable only through the connection's own baseUrl.
+    probeFn = ({ provider, connection, ...rest }) =>
+      probeConnectionModel({ provider, connection, ...rest, dispatch: dispatchFor(provider, connection) }),
     getSettingsFn = getSettings,
     updateSettingsFn = updateSettings,
     clearAccountErrorFn = clearAccountError,

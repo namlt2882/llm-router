@@ -26,6 +26,16 @@ export function rampLevels(maxLevel = 32) {
 
 const UNSUPPORTED = { status: "unsupported", reason: "provider type not supported for probing" };
 
+// Custom provider nodes (openai-compatible-chat-*) are synthetic lanes: the
+// connection's `provider` is the node id, there is no registry entry and no
+// executor, and the wire shape IS the generic openai POST at the connection's
+// own baseUrl — the same URL the runtime chat path builds (open-sse default
+// executor buildUrl). Without the node branches below both dispatch paths
+// report unsupported and the re-check scheduler drops such a lane without
+// ever touching the wire (observed live 2026-11-17).
+const NODE_PROVIDER_PREFIX = "openai-compatible-";
+const isNodeProvider = (provider) => typeof provider === "string" && provider.startsWith(NODE_PROVIDER_PREFIX);
+
 const snippet = (fail) => String(fail?.bodyText || "").slice(0, 200);
 
 /**
@@ -102,10 +112,15 @@ export function makeDefaultDispatch({ fetchImpl = fetch, dispatcher = null, prob
   return async function dispatch({ provider, connection, model }) {
     const entry = Array.isArray(registry) ? registry.find((p) => p?.id === provider) : null;
     const transport = entry?.transports?.find((t) => t?.format === "openai");
-    if (!transport) return { ok: false, unsupported: true };
-
     const connData = connection?.data && typeof connection.data === "object" ? connection.data : {};
-    const baseUrl = connection?.providerSpecificData?.baseUrl || transport.baseUrl;
+    const nodeBase = isNodeProvider(provider)
+      ? String(connection?.providerSpecificData?.baseUrl || connData.baseUrl || "").replace(/\/+$/, "")
+      : null;
+    if (!transport && !nodeBase) return { ok: false, unsupported: true };
+
+    const baseUrl = nodeBase
+      ? `${nodeBase}${connection?.providerSpecificData?.apiType === "responses" ? "/responses" : "/chat/completions"}`
+      : connection?.providerSpecificData?.baseUrl || transport.baseUrl;
     const token = connection?.apiKey || connection?.accessToken || connData.apiKey || connData.accessToken;
     const headers = { "content-type": "application/json" };
     if (token) headers.Authorization = `Bearer ${token}`;
@@ -184,15 +199,22 @@ export function makeExecutorDispatch({ probeTimeoutMs = 15000 } = {}) {
 }
 
 /**
- * Pick the dispatch a provider is actually probeable through: an openai-format
- * transport goes through the generic fetch path (Bearer, non-streaming —
- * cheapest); every other provider goes through its executor, which reports
- * unsupported when none exists. Registered in the scan's default probeFn so
- * the DEFAULT wiring reaches executor-only providers too.
+ * Pick the dispatch a provider is actually probeable through: a custom node
+ * goes through the generic fetch path at the connection's own baseUrl; an
+ * openai-format transport goes through the generic fetch path (Bearer,
+ * non-streaming — cheapest); every other provider goes through its executor,
+ * which reports unsupported when none exists. Registered in the scan's
+ * default probeFn so the DEFAULT wiring reaches executor-only providers and
+ * custom nodes too.
  * @param {string} provider
+ * @param {object} [connection]
  * @returns {(task: {provider: string, connection: object, model: string}) => Promise<{ok: true} | {ok: false, status?: number|null, bodyText?: string, unsupported?: true}>}
  */
-export function dispatchFor(provider) {
+export function dispatchFor(provider, connection = null) {
+  // A custom provider node matches no registry entry and has no executor;
+  // its wire shape is the generic openai POST at the connection's baseUrl,
+  // which makeDefaultDispatch builds from the connection alone.
+  if (isNodeProvider(provider)) return makeDefaultDispatch();
   // A specialized executor is the provider's REAL request shape (session
   // headers, forced streaming, fingerprint quirks); the generic openai POST
   // bypasses all of that. opencode-go is the proof: it declares an openai

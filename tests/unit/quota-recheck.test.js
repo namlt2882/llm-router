@@ -14,17 +14,38 @@ vi.mock("@/lib/localDb", () => ({
   updateSettings: async (patch) => { db.settings = { ...db.settings, ...patch }; },
   getProviderConnections: async () => db.settings.providerConnections || [],
 }));
-vi.mock("../../src/lib/fork/capacity/probe.js", () => ({
-  probeConnectionModel: async (input) => {
-    probe.inputs.push(input);
-    return { ...probe.results.shift(), input };
-  },
-  // The real module exports this; quotaRecheck's default probe path must
-  // consult it so executor-backed providers (opencode TLS-ClientHello,
-  // opencode-go MissingSessionID) get their own transport — the generic
-  // openai POST can never reach them (C2).
-  dispatchFor: (provider) => ({ dispatchMarker: provider }),
+// Stub registry: glm declares an openai transport (default dispatch path);
+// the custom node id matches no entry at all.
+vi.mock("open-sse/providers/registry/index.js", () => ({
+  default: [
+    { id: "glm", transports: [{ format: "openai", baseUrl: "https://glm.example/v4/chat/completions" }] },
+    { id: "nogpt", transports: [{ format: "claude", baseUrl: "https://x/api/messages" }] },
+  ],
 }));
+// Neither glm nor a custom node id carries a specialized executor (the real
+// executors index pulls in executor modules that read registry entries at
+// import time, so it cannot load under the stub registry above).
+vi.mock("open-sse/executors/index.js", () => ({
+  getExecutor: () => null,
+  hasSpecializedExecutor: () => false,
+}));
+vi.mock("../../src/lib/fork/capacity/probe.js", async (importOriginal) => {
+  const actual = await importOriginal();
+  const realProbe = actual.probeConnectionModel;
+  return {
+    ...actual,
+    // Recorder with a realMode passthrough: most tests assert on the verdict
+    // mapping and hand probe.results to the recorder; the dispatch-selection
+    // tests set realMode so the REAL probeConnectionModel + REAL dispatchFor
+    // run against a stubbed fetch — which builder dispatchFor consulted is
+    // an internal binding, not observable; the wire URL it hits is.
+    probeConnectionModel: async (input) => {
+      probe.inputs.push(input);
+      if (probe.realMode) return realProbe(input);
+      return { ...probe.results.shift(), input };
+    },
+  };
+});
 vi.mock("../../src/sse/services/auth.js", () => ({
   clearAccountError: async (...args) => { cleared.calls.push(args); },
 }));
@@ -38,7 +59,7 @@ const run = (over = {}) => processDueQuotaRecheck({ now: NOW, probeFn: async () 
 const conn = () => [{ id: "c1", provider: "glm", isActive: true, data: "{}" }];
 
 describe("processDueQuotaRecheck", () => {
-  beforeEach(() => { db.settings = {}; probe.results = []; probe.inputs = []; cleared.calls = []; });
+  beforeEach(() => { db.settings = {}; probe.results = []; probe.inputs = []; probe.realMode = false; cleared.calls = []; });
 
   it("restores previousBudget, clears the account error and drops the entry on probe ok", async () => {
     db.settings = { quotaRecheck: [entry()], detectedBudgets: { c1: { m1: { budget: 0, quota: true, previousBudget: 4 } } }, providerConnections: conn() };
@@ -80,17 +101,57 @@ describe("processDueQuotaRecheck", () => {
     expect(db.settings.quotaRecheck).toHaveLength(1);
   });
 
-  it("probes with the provider's own dispatch on the default path (executor-backed lanes)", async () => {
+  // Wire-level dispatch selection: realMode lets the REAL probeConnectionModel
+  // run, so the probe travels through the REAL dispatchFor → dispatch chain
+  // and the stubbed fetch records the URL it chose. Which builder object was
+  // consulted is an internal module binding — unobservable from outside.
+  const wireFetch = (calls) => async (url) => {
+    calls.push(String(url));
+    return new Response(JSON.stringify({ choices: [{ message: { content: "hi" } }] }), { status: 200 });
+  };
+
+  it("probes a registry lane through its openai transport on the default path", async () => {
+    probe.realMode = true;
     db.settings = { quotaRecheck: [entry()], providerConnections: conn() };
-    probe.results = [{ status: "ok", budget: 1, requests: 1 }];
-    // No probeFn: the production default path. It must reach the lane the
-    // way scan.js does — through dispatchFor(provider) — or executor-backed
-    // providers (the GoUsageLimitError lanes this feature exists for) are
-    // probed with the generic transport and can never be restored.
-    const out = await processDueQuotaRecheck({ now: NOW });
-    expect(out.restored).toBe(1);
-    expect(probe.inputs).toHaveLength(1);
-    expect(probe.inputs[0].dispatch).toEqual({ dispatchMarker: "glm" });
+    const calls = [];
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = wireFetch(calls);
+    try {
+      // No probeFn: the production default path. It must reach the lane the
+      // way scan.js does — through dispatchFor(provider, connection) — or
+      // executor-backed providers (the GoUsageLimitError lanes this feature
+      // exists for) are probed with the generic transport and can never be
+      // restored.
+      const out = await processDueQuotaRecheck({ now: NOW });
+      expect(out.restored).toBe(1);
+      expect(probe.inputs).toHaveLength(1);
+      expect(calls).toEqual(["https://glm.example/v4/chat/completions"]);
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  });
+
+  it("a custom-node lane probes the wire at its own baseUrl (not dropped as unsupported)", async () => {
+    probe.realMode = true;
+    const nodeProvider = "openai-compatible-chat-1f4a7e22-9000-4a10-b001-fanout000001";
+    db.settings = {
+      quotaRecheck: [entry({ connectionId: "c9", provider: nodeProvider })],
+      providerConnections: [{ id: "c9", provider: nodeProvider, isActive: true, data: "{}", providerSpecificData: { baseUrl: "http://localhost:9101/v1", apiType: "chat" } }],
+    };
+    const calls = [];
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = wireFetch(calls);
+    try {
+      const out = await processDueQuotaRecheck({ now: NOW });
+      // Without this the node lane resolves no executor and no registry
+      // transport, is dropped terminal-unsupported, and the queue empties
+      // with zero wire probes — observed live 2026-11-17.
+      expect(out.dropped).toBe(0);
+      expect(out.restored).toBe(1);
+      expect(calls).toEqual(["http://localhost:9101/v1/chat/completions"]);
+    } finally {
+      globalThis.fetch = realFetch;
+    }
   });
 
   it("drops terminal non-quota verdicts (auth/config/balance/unsupported)", async () => {

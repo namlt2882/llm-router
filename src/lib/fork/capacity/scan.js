@@ -89,7 +89,7 @@ export async function runCapacityScan({
   getInflightCount: getInflightDep = getInflightCount,
   checkAndRefreshToken: refreshDep = checkAndRefreshToken,
   probeFn = ({ provider, connection, model, maxLevel }) =>
-    probeConnectionModel({ provider, connection, model, maxLevel, dispatch: dispatchFor(provider) }),
+    probeConnectionModel({ provider, connection, model, maxLevel, dispatch: dispatchFor(provider, connection) }),
   now = () => Date.now(),
   parallelism = 4,
   provider = null,
