@@ -6,8 +6,8 @@ vi.mock("@/lib/localDb", () => ({
   getProviderConnections: async () => state.connections,
 }));
 vi.mock("../../src/lib/db/repos/usageRepo.js", () => ({
-  getActiveRequests: async () => ({ activeRequests: [{ count: state.active }], recentRequests: [], errorProvider: "" }),
-  recordConcurrencySample: async (inflight, totalBudget) => { state.rows.push({ inflight, totalBudget }); },
+  getActiveRequests: async () => ({ activeRequests: state.activeList || [{ count: state.active }], recentRequests: [], errorProvider: "" }),
+  recordConcurrencySample: async (inflight, totalBudget, opts) => { state.rows.push({ inflight, totalBudget, byProvider: opts?.byProvider }); },
   pruneConcurrencySamples: async (_db, cutoffIso) => { state.deleted.push(cutoffIso); },
 }));
 // The registry carries THREE free noAuth providers (opencode, devin-cli,
@@ -103,6 +103,19 @@ describe("sampleOnce", () => {
     expect(state.rows).toHaveLength(1);
     expect(state.rows[0].inflight).toBe(3);
     expect(state.rows[0].totalBudget).toBe("4");
+  });
+  it("records the in-flight split per provider alongside the total", async () => {
+    state.activeList = [
+      { provider: "glm", model: "a", count: 2 },
+      { provider: "glm", model: "b", count: 1 },
+      { provider: "oc", model: "c", count: 4 },
+    ];
+    state.settings = { detectedBudgets: {} };
+    try {
+      await sampleOnce({ now: new Date("2026-11-16T10:00:30.000Z"), globalLimit: 4 });
+    } finally { state.activeList = null; }
+    expect(state.rows[0].inflight).toBe(7);
+    expect(state.rows[0].byProvider).toEqual({ glm: 3, oc: 4 });
   });
   it("prunes hourly (minute 0) and not otherwise", async () => {
     await sampleOnce({ now: new Date("2026-11-16T10:00:00.000Z") });

@@ -36,4 +36,15 @@ describe("concurrencySamples round-trip", () => {
     await pruneConcurrencySamples(db, new Date(Date.now() + 86400000).toISOString()); // cutoff in the future
     expect(db.all("SELECT id FROM concurrencySamples WHERE inflight = '2' AND totalBudget = '10'")).toHaveLength(0);
   });
+
+  it("persists the per-provider split as JSON in byProvider, null when none given", async () => {
+    const { getAdapter } = await import("../../src/lib/db/driver.js");
+    const { recordConcurrencySample } = await import("../../src/lib/db/repos/usageRepo.js");
+    const db = await getAdapter();
+    await recordConcurrencySample(3, 10, { byProvider: { glm: 2, oc: 1 } });
+    await recordConcurrencySample(1, 10);
+    const rows = db.all("SELECT inflight, byProvider FROM concurrencySamples ORDER BY id ASC");
+    expect(JSON.parse(rows[0].byProvider)).toEqual({ glm: 2, oc: 1 });
+    expect(rows[1].byProvider).toBeNull();
+  });
 });

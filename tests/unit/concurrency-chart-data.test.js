@@ -80,6 +80,25 @@ describe("getConcurrencyChartData", () => {
     expect(concurrencySum).toBeCloseTo((2 + 4) / 2 + 7, 6);
   });
 
+  it("splits each bucket's average concurrency by provider; legacy rows without a split land under unknown", async () => {
+    const { usageRepo } = await loadRepo();
+    const base = Date.now() - 2.5 * 3600000;
+    await usageRepo.recordConcurrencySample(3, 10, { now: new Date(base), byProvider: { glm: 2, oc: 1 } });
+    await usageRepo.recordConcurrencySample(1, 10, { now: new Date(base + 60000), byProvider: { glm: 1 } });
+    await usageRepo.recordConcurrencySample(4, 10, { now: new Date(base + 3600000) }); // pre-005 style row
+    const out = await usageRepo.getConcurrencyChartData("24h");
+    const withSplit = out.filter((b) => Object.keys(b.providers || {}).length);
+    expect(withSplit).toHaveLength(2);
+    const first = withSplit[0].providers;
+    expect(first.glm).toBeCloseTo(1.5, 6); // (2+1)/2
+    expect(first.oc).toBeCloseTo(0.5, 6);  // (1+0)/2 — absent in a sample means zero, not skipped
+    expect(withSplit[1].providers).toEqual({ unknown: 4 });
+    for (const b of out) {
+      const sum = Object.values(b.providers || {}).reduce((s, v) => s + v, 0);
+      expect(sum).toBeCloseTo(b.concurrency, 6); // stacked bars always add up to the total
+    }
+  });
+
   it("empty table → zeroed buckets with null rates, never NaN", async () => {
     const { usageRepo } = await loadRepo();
     const out = await usageRepo.getConcurrencyChartData("7d");

@@ -107,8 +107,13 @@ export async function sampleOnce(deps = {}) {
     getProviderConnections({}),
   ]);
   const inflight = (activeRequests || []).reduce((sum, r) => sum + (Number(r?.count) || 0), 0);
+  const byProvider = {};
+  for (const r of activeRequests || []) {
+    const n = Number(r?.count) || 0;
+    if (n > 0) byProvider[r.provider || "unknown"] = (byProvider[r.provider || "unknown"] || 0) + n;
+  }
   const totalBudget = await systemConcurrencyBudget({ settings, connections, globalLimit });
-  await recordConcurrencySample(inflight, String(totalBudget), { now: at });
+  await recordConcurrencySample(inflight, String(totalBudget), { now: at, byProvider });
   // Retention runs once per HOUR: the 30s scheduler puts two ticks inside
   // minute 0 (:00-phase and :30-phase); only the first half of the minute
   // prunes, so exactly one of the two fires. The DELETE is idempotent anyway.

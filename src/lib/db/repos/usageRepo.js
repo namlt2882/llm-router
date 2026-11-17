@@ -832,11 +832,26 @@ export async function getConcurrencyChartData(period = "7d") {
   const inflightSum = new Array(buckets.length).fill(0);
   const budgetSum = new Array(buckets.length).fill(0);
   const sampleCount = new Array(buckets.length).fill(0);
+  const providerSum = buckets.map(() => ({}));
   // Samples walked with a monotonic bucket pointer — findIndex per sample was
   // O(samples × buckets) and the table grows toward 60d ≈ 173k rows (review
   // minor M3). Sort first: the storage layer makes no ordering promise.
-  const samples = db.all("SELECT ts, inflight, totalBudget FROM concurrencySamples WHERE ts >= ?", [windowStart])
-    .map((s) => ({ t: new Date(s.ts).getTime(), inflight: Number(s.inflight) || 0, budget: Number(s.totalBudget) || 0 }))
+  const parseSplit = (raw, inflight) => {
+    if (raw) {
+      try {
+        const obj = JSON.parse(raw);
+        if (obj && typeof obj === "object") return obj;
+      } catch {}
+    }
+    // Pre-005 rows (or an unparseable split) carry no breakdown: the whole
+    // total is attributed to "unknown" so the stack still sums to concurrency.
+    return inflight > 0 ? { unknown: inflight } : {};
+  };
+  const samples = db.all("SELECT ts, inflight, totalBudget, byProvider FROM concurrencySamples WHERE ts >= ?", [windowStart])
+    .map((s) => {
+      const inflight = Number(s.inflight) || 0;
+      return { t: new Date(s.ts).getTime(), inflight, budget: Number(s.totalBudget) || 0, split: parseSplit(s.byProvider, inflight) };
+    })
     .filter((r) => !Number.isNaN(r.t) && r.t >= buckets[0].start)
     .sort((a, b) => a.t - b.t);
   let sIdx = 0;
@@ -846,6 +861,9 @@ export async function getConcurrencyChartData(period = "7d") {
       inflightSum[b] += samples[sIdx].inflight;
       budgetSum[b] += samples[sIdx].budget;
       sampleCount[b] += 1;
+      for (const [pid, n] of Object.entries(samples[sIdx].split)) {
+        providerSum[b][pid] = (providerSum[b][pid] || 0) + (Number(n) || 0);
+      }
       sIdx += 1;
     }
   }
@@ -871,6 +889,9 @@ export async function getConcurrencyChartData(period = "7d") {
     return {
       label: b.label,
       concurrency: sampleCount[i] ? inflightSum[i] / sampleCount[i] : 0,
+      providers: Object.fromEntries(
+        Object.entries(providerSum[i]).filter(([, v]) => v > 0).map(([pid, v]) => [pid, v / sampleCount[i]]),
+      ),
       utilityRate: budgetSum[i] > 0 ? (inflightSum[i] / budgetSum[i]) * 100 : null,
       cumulativeTokens: cumTokens,
       cumulativeCost: cumCost,
@@ -928,8 +949,8 @@ export async function recordConcurrencySample(inflight, totalBudget, opts = {}) 
     const db = await getAdapter();
     const ts = opts.now instanceof Date ? opts.now.toISOString() : String(opts.now || new Date().toISOString());
     await db.run(
-      "INSERT INTO concurrencySamples (ts, inflight, totalBudget) VALUES (?, ?, ?)",
-      [ts, String(inflight), String(totalBudget)],
+      "INSERT INTO concurrencySamples (ts, inflight, totalBudget, byProvider) VALUES (?, ?, ?, ?)",
+      [ts, String(inflight), String(totalBudget), opts.byProvider ? JSON.stringify(opts.byProvider) : null],
     );
   } catch (e) {
     console.error("[usageRepo] recordConcurrencySample failed:", e.message);
