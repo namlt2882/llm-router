@@ -22,6 +22,7 @@ import { handleNonStreamingResponse } from "./chatCore/nonStreamingHandler.js";
 // counter is decremented.
 import { releaseAccountSlot } from "@/sse/services/accountInflight.js";
 import { handleStreamingResponse, buildOnStreamComplete } from "./chatCore/streamingHandler.js";
+import { openAttempt, fitBodyToAttempt, estimateInputTokens, attachCostHeaders, budgetRefusalResponse } from "../utils/budget.js";
 import { detectClientTool, isNativePassthrough } from "../utils/clientDetector.js";
 import { dedupeTools } from "../utils/toolDeduper.js";
 import { takeRenamedToolNames } from "../utils/opencodeFingerprint.js";
@@ -64,7 +65,34 @@ export function stripContinuityFields(body) {
   return body;
 }
 
-export async function handleChatCore({ body, modelInfo, credentials, log, onCredentialsRefreshed, onRequestSuccess, onDisconnect, clientRawRequest, connectionId, userAgent, apiKey, ccFilterNaming, rtkEnabled, headroomEnabled, headroomUrl, headroomCompressUserMessages, headroomTimeoutMs, cavemanEnabled, cavemanLevel, ponytailEnabled, ponytailLevel, customPromptEnabled, customPrompt, pxpipeEnabled, pxpipeMinChars, pxpipeTimeoutMs, pxpipeTransform, onPxpipeEvent, sourceFormatOverride, providerThinking, providerOverrides }) {
+// Fork patch #26: when the request carries a WaveBot spend budget, every attempt runs under a ceiling
+// carved from it and reports its cost; the attempt is released on every exit path.
+export async function handleChatCore(opts) {
+  const { budgetParent } = opts;
+  if (!budgetParent) return handleChatCoreInner(opts);
+  const ref = { attempt: null };
+  let result;
+  try {
+    result = await handleChatCoreInner({ ...opts, budgetRef: ref });
+  } catch (error) {
+    ref.attempt?.release();
+    throw error;
+  }
+  const attempt = ref.attempt;
+  if (!attempt) return result;
+  if (!result.success) {
+    attempt.release();
+    return result;
+  }
+  if (attempt.streaming) return result; // the stream releases it when it ends
+  try {
+    return { ...result, response: await attachCostHeaders(result.response, attempt) };
+  } finally {
+    attempt.release();
+  }
+}
+
+async function handleChatCoreInner({ budgetParent, budgetRef, body, modelInfo, credentials, log, onCredentialsRefreshed, onRequestSuccess, onDisconnect, clientRawRequest, connectionId, userAgent, apiKey, ccFilterNaming, rtkEnabled, headroomEnabled, headroomUrl, headroomCompressUserMessages, headroomTimeoutMs, cavemanEnabled, cavemanLevel, ponytailEnabled, ponytailLevel, customPromptEnabled, customPrompt, pxpipeEnabled, pxpipeMinChars, pxpipeTimeoutMs, pxpipeTransform, onPxpipeEvent, sourceFormatOverride, providerThinking, providerOverrides }) {
   const { provider, model } = modelInfo;
   const requestStartTime = Date.now();
   // Stable per-session color so all lines of one CLI conversation share a tag
@@ -245,6 +273,23 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
       translatedBody.tools = deduped;
       log?.debug?.("TOOLDEDUP", `stripped ${stripped.length}: ${stripped.slice(0, 3).join(", ")}${stripped.length > 3 ? "..." : ""}`);
     }
+  }
+
+  // Fork patch #26: carve this attempt's ceiling from the request budget and clamp the output cap.
+  let budget = null;
+  if (budgetParent) {
+    budget = openAttempt(budgetParent, { format: sourceFormat, inputTokens: estimateInputTokens(translatedBody) });
+    const fit = budget ? fitBodyToAttempt(translatedBody, targetFormat, budget) : { refusal: { status: 402, code: "ai_credit_exhausted", message: "AI credit exhausted" } };
+    if (fit.refusal) {
+      budget?.release();
+      trackPendingRequest(model, provider, connectionId, false, true);
+      releaseAccountSlot(connectionId);
+      // success:true so the caller returns it to the client as-is: a budget refusal says nothing about
+      // the account and must not trip its cooldown.
+      return { success: true, response: budgetRefusalResponse(fit.refusal) };
+    }
+    translatedBody = fit.body;
+    budgetRef.attempt = budget;
   }
 
   // Token savers: applied at the final body just before dispatch
@@ -541,20 +586,21 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
   // non-stream OpenAI/native client behind a Responses upstream must also take
   // this path — handleForcedSSEToJson returns null when the body is not SSE.
   if (!clientRequestedStreaming && (providerRequiresStreaming || providerResponseFormat === FORMATS.OPENAI_RESPONSES)) {
-    const result = await handleForcedSSEToJson({ ...sharedCtx, providerResponse, sourceFormat, targetFormat: providerResponseFormat, customToolNames, toolNameMap, trackDone, appendLog });
+    const result = await handleForcedSSEToJson({ ...sharedCtx, providerResponse, sourceFormat, targetFormat: providerResponseFormat, customToolNames, toolNameMap, trackDone, appendLog, budget });
     if (result) { streamController.handleComplete(); return result; }
   }
 
   // True non-streaming response
   if (!stream) {
-    const result = await handleNonStreamingResponse({ ...sharedCtx, providerResponse, sourceFormat, targetFormat: providerResponseFormat, reqLogger, toolNameMap, customToolNames, trackDone, appendLog });
+    const result = await handleNonStreamingResponse({ ...sharedCtx, providerResponse, sourceFormat, targetFormat: providerResponseFormat, reqLogger, toolNameMap, customToolNames, trackDone, appendLog, budget });
     streamController.handleComplete();
     return result;
   }
 
   // Streaming response
-  const { onStreamComplete, streamDetailId } = buildOnStreamComplete({ ...sharedCtx });
-  return handleStreamingResponse({ ...sharedCtx, providerResponse, sourceFormat, targetFormat: providerResponseFormat, userAgent, reqLogger, toolNameMap, customToolNames, streamController, onStreamComplete, streamDetailId, credentials });
+  if (budget) budget.streaming = true;
+  const { onStreamComplete, streamDetailId } = buildOnStreamComplete({ ...sharedCtx, budget });
+  return handleStreamingResponse({ ...sharedCtx, budget, providerResponse, sourceFormat, targetFormat: providerResponseFormat, userAgent, reqLogger, toolNameMap, customToolNames, streamController, onStreamComplete, streamDetailId, credentials });
 }
 
 export function isTokenExpiringSoon(expiresAt, bufferMs = 5 * 60 * 1000) {

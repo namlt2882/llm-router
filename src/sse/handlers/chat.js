@@ -8,6 +8,8 @@ import {
   isValidApiKey,
 } from "../services/auth.js";
 import { parsePriority } from "../services/accountInflight.js";
+import { gateBudget, budgetRefusalResponse, setBudgetCtx, getBudgetCtx } from "open-sse/utils/budget.js";
+import { getSalePrice } from "@/lib/db/repos/salePriceRepo.js";
 import { fanoutCtxForEntry } from "../services/fanoutBudget.js";
 import { orderModelsByHeadroom, rememberServedModel } from "../services/fanoutModels.js";
 import { handleAntigravityQuotaError, clearAntigravityStrikes } from "../services/antigravityQuota.js";
@@ -108,6 +110,16 @@ export async function handleChat(request, clientRawRequest = null) {
   const userAgent = request?.headers?.get("user-agent") || "";
   const bypassResponse = handleBypassRequest(body, modelStr, userAgent, !!settings.ccFilterNaming);
   if (bypassResponse) return bypassResponse.response || bypassResponse;
+
+  // Fork patch #26: WaveBot spend ceiling. A budget that is present is always honoured; with
+  // settings.requireBudget on, a call without one is refused. The price is the REQUESTED name's
+  // sale price (a combo is priced as itself, whichever member serves it).
+  const budgetGate = await gateBudget({ headers: request.headers, model: modelStr, enforce: !!settings.requireBudget, getSale: getSalePrice });
+  if (!budgetGate.ok) {
+    log.warn("BUDGET", `${budgetGate.code} for ${modelStr}`);
+    return budgetRefusalResponse(budgetGate);
+  }
+  if (budgetGate.ctx) setBudgetCtx(request, budgetGate.ctx);
 
   const requiredCapabilities = detectRequiredCapabilities(body);
 
@@ -357,6 +369,7 @@ async function handleSingleModelChat(body, modelStr, clientRawRequest = null, re
     const chatSettings = await getSettings();
     const providerThinking = (chatSettings.providerThinking || {})[provider] || null;
     const result = await handleChatCore({
+      budgetParent: getBudgetCtx(request),
       body: { ...body, model: `${provider}/${model}` },
       modelInfo: { provider, model },
       credentials: refreshedCredentials,
