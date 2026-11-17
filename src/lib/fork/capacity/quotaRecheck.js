@@ -20,10 +20,10 @@
  */
 
 import { getSettings, updateSettings, getProviderConnections } from "@/lib/localDb";
-import { probeConnectionModel } from "./probe.js";
+import { probeConnectionModel, dispatchFor } from "./probe.js";
 import { clearAccountError } from "@/sse/services/auth.js";
 import { FREE_PROVIDERS } from "@/shared/constants/providers.js";
-import { parseResetsIn } from "@/sse/services/quotaCollapse.js";
+import { parseResetsIn, withQuotaSettingsLock } from "@/sse/services/quotaCollapse.js";
 
 const DEFAULT_MAX_PER_TICK = 5;
 const DEFAULT_HORIZON_MS = 24 * 60 * 60 * 1000;
@@ -45,10 +45,26 @@ const isKeylessLaneId = (id) => id === "noauth" || FREE_PROVIDERS[id]?.noAuth ==
  * }} [deps]
  * @returns {Promise<{ probed: number, restored: number, rescheduled: number, dropped: number }>}
  */
-export async function processDueQuotaRecheck(deps = {}) {
+export function processDueQuotaRecheck(deps = {}) {
+  // Under the same lock as the live collapse: both are read-modify-write
+  // over detectedBudgets/quotaRecheck, and a recheck tick interleaved with a
+  // collapsing request would otherwise replace the collapse's whole map with
+  // one computed from an older snapshot (see withQuotaSettingsLock).
+  return withQuotaSettingsLock(() => processDueQuotaRecheckInner(deps));
+}
+
+async function processDueQuotaRecheckInner(deps = {}) {
   const {
     now = Date.now(),
-    probeFn = (input) => probeConnectionModel(input),
+    // Same default as the scan's probe: dispatchFor(provider), NOT the bare
+    // call (which would fall back to makeDefaultDispatch()). Executor-backed
+    // providers — opencode free (TLS-ClientHello + forced streaming) and
+    // opencode-go (400 MissingSessionID on a session-less request) — are the
+    // GoUsageLimitError lanes this feature exists for, and the generic openai
+    // POST can never reach them; the bare call would make every such lane
+    // unprobeable and permanently closed until the daily scan.
+    probeFn = ({ provider, ...rest }) =>
+      probeConnectionModel({ provider, ...rest, dispatch: dispatchFor(provider) }),
     getSettingsFn = getSettings,
     updateSettingsFn = updateSettings,
     clearAccountErrorFn = clearAccountError,
@@ -65,6 +81,13 @@ export async function processDueQuotaRecheck(deps = {}) {
   const byId = new Map(connections.map((c) => [c.id, c]));
   const out = { probed: 0, restored: 0, rescheduled: 0, dropped: 0 };
   const kept = [];
+  // Restores of one tick accumulate into ONE map built from the snapshot
+  // read above, so two entries for the same lane in a single tick cannot
+  // clobber each other — and the final write below is the only thing that
+  // persists them: getSettings returns a fresh object every call, so an
+  // in-place mutation of it (the original implementation) never reached the
+  // store and the lane stayed closed until the daily scan.
+  let restoredBudgets = null;
 
   // Oldest first, capped: a burst of due entries probes at most maxPerTick
   // per tick so a mass collapse cannot become a mass probe burst.
@@ -92,18 +115,17 @@ export async function processDueQuotaRecheck(deps = {}) {
     const status = verdict?.status;
 
     if (status === "ok") {
-      const detectedBudgets = settings?.detectedBudgets && typeof settings.detectedBudgets === "object"
-        ? { ...settings.detectedBudgets } : {};
-      const lane = detectedBudgets[laneId] && typeof detectedBudgets[laneId] === "object"
-        ? { ...detectedBudgets[laneId] } : {};
+      restoredBudgets = restoredBudgets || (settings?.detectedBudgets && typeof settings.detectedBudgets === "object"
+        ? { ...settings.detectedBudgets } : {});
+      const lane = restoredBudgets[laneId] && typeof restoredBudgets[laneId] === "object"
+        ? { ...restoredBudgets[laneId] } : {};
       const existing = lane[entry.model];
       if (existing && Number.isFinite(Number(existing.previousBudget))) {
         lane[entry.model] = { budget: Number(existing.previousBudget), detectedAt: existing.detectedAt };
       } else {
         delete lane[entry.model];
       }
-      detectedBudgets[laneId] = lane; // lane may be empty — the connection key itself stays
-      settings.detectedBudgets = detectedBudgets;
+      restoredBudgets[laneId] = lane; // lane may be empty — the connection key itself stays
       try {
         await clearAccountErrorFn(laneId, connection, entry.model);
       } catch (e) {
@@ -130,7 +152,12 @@ export async function processDueQuotaRecheck(deps = {}) {
     out.dropped += 1;
   }
 
-  await updateSettingsFn({ quotaRecheck: kept });
+  // One write per tick, and the restored budgets ride the SAME patch: they
+  // must persist through updateSettings or the lane never reopens (C1).
+  await updateSettingsFn({
+    quotaRecheck: kept,
+    ...(restoredBudgets ? { detectedBudgets: restoredBudgets } : {}),
+  });
   return out;
 }
 

@@ -61,7 +61,27 @@ export function parseResetsIn(errorText) {
  *          errorText?: string, resetsAtMs?: number|null }} input
  * @returns {Promise<boolean>} true when the lane was collapsed
  */
-export async function handleLiveQuotaError({ connectionId, provider, model, errorText, resetsAtMs } = {}) {
+
+// Collapse and recheck both read-modify-write settings maps
+// (detectedBudgets / quotaRecheck). updateSettings is transactional per call,
+// but it merges at TOP-LEVEL key granularity from the row's current state —
+// so two RMWs whose maps were computed from the same snapshot replace, not
+// merge, each other's whole map. A fanout burst (several accounts hitting
+// their quota at once) produces exactly that interleave, and a lost collapse
+// is not re-triggered: admission stops sending traffic to the lane it
+// collapsed. One in-process promise chain serializes every quota settings
+// RMW. The capacity scan is deliberately NOT under this lock — it runs for
+// minutes and holding the lock that long would stall live collapses; its own
+// scanInFlight guard bounds it to one writer, and a collapse lost to a
+// running scan resurfaces at that scan's next run.
+let quotaSettingsChain = Promise.resolve();
+export function withQuotaSettingsLock(fn) {
+  const run = quotaSettingsChain.then(fn, fn);
+  quotaSettingsChain = run.then(() => {}, () => {});
+  return run;
+}
+
+async function handleLiveQuotaErrorInner({ connectionId, provider, model, errorText, resetsAtMs } = {}) {
   if (!connectionId || !model) return false;
   const now = Date.now();
   const futureReset = Number.isFinite(resetsAtMs) && resetsAtMs > now;
@@ -75,14 +95,23 @@ export async function handleLiveQuotaError({ connectionId, provider, model, erro
     ? { ...detectedBudgets[connectionId] }
     : {};
   const existing = lane[model];
-  const previousBudget = existing && Number.isFinite(Number(existing.budget)) && !existing.quota
-    ? Number(existing.budget)
-    : undefined;
+  // The stash survives repeated collapses: a second in-flight request on the
+  // same lane erroring before the reset (the normal fanout shape) re-enters
+  // here with {budget: 0, quota: true, previousBudget: 4} — taking the
+  // budget as the stash there would overwrite the known 4 with nothing, and
+  // the eventual restore would fall back to the global cap instead of the
+  // measured budget. A re-collapse also keeps the first detection time and
+  // the scan's unbounded marker so the collapse/restore round-trip is
+  // information-preserving.
+  const previousBudget = existing?.quota
+    ? (Number.isFinite(Number(existing?.previousBudget)) ? Number(existing.previousBudget) : undefined)
+    : (existing && Number.isFinite(Number(existing.budget)) ? Number(existing.budget) : undefined);
   lane[model] = {
     budget: 0,
     quota: true,
     ...(previousBudget !== undefined ? { previousBudget } : {}),
-    detectedAt: new Date(now).toISOString(),
+    ...(existing?.unbounded ? { unbounded: true } : {}),
+    detectedAt: existing?.quota && existing.detectedAt ? existing.detectedAt : new Date(now).toISOString(),
     source: "live",
   };
   detectedBudgets[connectionId] = lane;
@@ -107,4 +136,8 @@ export async function handleLiveQuotaError({ connectionId, provider, model, erro
   }
   await updateSettings(patch);
   return true;
+}
+
+export function handleLiveQuotaError(input) {
+  return withQuotaSettingsLock(() => handleLiveQuotaErrorInner(input));
 }

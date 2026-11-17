@@ -1,15 +1,29 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 const db = vi.hoisted(() => ({ settings: {} }));
-const probe = vi.hoisted(() => ({ results: [] }));
+const probe = vi.hoisted(() => ({ results: [], inputs: [] }));
 const cleared = vi.hoisted(() => ({ calls: [] }));
 
 vi.mock("@/lib/localDb", () => ({
-  getSettings: async () => db.settings,
+  // Like the real getSettings (parseJson → mergeWithDefaults), every call
+  // returns a FRESH object — in-place mutations of it are invisible to the
+  // store and can only be persisted through updateSettings' patch. This
+  // shape is deliberate: the restore-on-probe contract must be proven via
+  // the patch, not via a shared reference (the fixture that let C1 pass
+  // vacuously returned db.settings itself).
+  getSettings: async () => JSON.parse(JSON.stringify(db.settings)),
   updateSettings: async (patch) => { db.settings = { ...db.settings, ...patch }; },
   getProviderConnections: async () => db.settings.providerConnections || [],
 }));
 vi.mock("../../src/lib/fork/capacity/probe.js", () => ({
-  probeConnectionModel: async (input) => ({ ...probe.results.shift(), input }),
+  probeConnectionModel: async (input) => {
+    probe.inputs.push(input);
+    return { ...probe.results.shift(), input };
+  },
+  // The real module exports this; quotaRecheck's default probe path must
+  // consult it so executor-backed providers (opencode TLS-ClientHello,
+  // opencode-go MissingSessionID) get their own transport — the generic
+  // openai POST can never reach them (C2).
+  dispatchFor: (provider) => ({ dispatchMarker: provider }),
 }));
 vi.mock("../../src/sse/services/auth.js", () => ({
   clearAccountError: async (...args) => { cleared.calls.push(args); },
@@ -24,7 +38,7 @@ const run = (over = {}) => processDueQuotaRecheck({ now: NOW, probeFn: async () 
 const conn = () => [{ id: "c1", provider: "glm", isActive: true, data: "{}" }];
 
 describe("processDueQuotaRecheck", () => {
-  beforeEach(() => { db.settings = {}; probe.results = []; cleared.calls = []; });
+  beforeEach(() => { db.settings = {}; probe.results = []; probe.inputs = []; cleared.calls = []; });
 
   it("restores previousBudget, clears the account error and drops the entry on probe ok", async () => {
     db.settings = { quotaRecheck: [entry()], detectedBudgets: { c1: { m1: { budget: 0, quota: true, previousBudget: 4 } } }, providerConnections: conn() };
@@ -64,6 +78,19 @@ describe("processDueQuotaRecheck", () => {
     const out = await run();
     expect(out.probed).toBe(1);
     expect(db.settings.quotaRecheck).toHaveLength(1);
+  });
+
+  it("probes with the provider's own dispatch on the default path (executor-backed lanes)", async () => {
+    db.settings = { quotaRecheck: [entry()], providerConnections: conn() };
+    probe.results = [{ status: "ok", budget: 1, requests: 1 }];
+    // No probeFn: the production default path. It must reach the lane the
+    // way scan.js does — through dispatchFor(provider) — or executor-backed
+    // providers (the GoUsageLimitError lanes this feature exists for) are
+    // probed with the generic transport and can never be restored.
+    const out = await processDueQuotaRecheck({ now: NOW });
+    expect(out.restored).toBe(1);
+    expect(probe.inputs).toHaveLength(1);
+    expect(probe.inputs[0].dispatch).toEqual({ dispatchMarker: "glm" });
   });
 
   it("drops terminal non-quota verdicts (auth/config/balance/unsupported)", async () => {

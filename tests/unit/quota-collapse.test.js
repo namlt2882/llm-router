@@ -7,8 +7,19 @@ import { markAccountUnavailable } from "../../src/sse/services/auth.js";
 // so its writes land in this map (vi.mock is hoisted above every import).
 const db = vi.hoisted(() => ({ settings: {} }));
 vi.mock("@/lib/localDb", () => ({
-  getSettings: async () => db.settings,
-  updateSettings: async (patch) => { db.settings = { ...db.settings, ...patch }; },
+  // Fresh object per call, like the real getSettings (parseJson →
+  // mergeWithDefaults): every read sees a copy, and only updateSettings'
+  // patch persists. Never hand a live reference to code doing
+  // read-modify-write — the fixture shape that let a restore bug pass
+  // vacuously (see quota-recheck.test.js).
+  getSettings: async () => JSON.parse(JSON.stringify(db.settings)),
+  updateSettings: async (patch) => {
+    // A macrotask gap between the call and the merge makes two concurrent
+    // read-modify-write calls interleave deterministically — the shape a
+    // fanout burst produces when several accounts error at once.
+    await new Promise((r) => setTimeout(r, 10));
+    db.settings = { ...db.settings, ...patch };
+  },
   getProviderConnections: async (query = {}) =>
     (db.settings.providerConnections || []).filter((c) => !query.provider || c.provider === query.provider),
   updateProviderConnection: async (id, patch) => {
@@ -55,6 +66,40 @@ describe("handleLiveQuotaError", () => {
     const entry = db.settings.detectedBudgets.c1.m1;
     expect(entry).toMatchObject({ budget: 0, quota: true, previousBudget: 4, source: "live" });
     expect(db.settings.quotaRecheck).toEqual([{ connectionId: "c1", provider: "opencode-go", model: "m1", at: expect.any(String) }]);
+  });
+
+  it("re-collapse preserves the stash: previousBudget, unbounded and the first detection time", async () => {
+    // Scan already measured this lane (budget 4, unbounded ramp). A live
+    // quota error collapses it; a SECOND in-flight request on the same lane
+    // erroring before the reset — the normal fanout shape — must not
+    // destroy the stash the eventual restore depends on.
+    db.settings = { detectedBudgets: { c1: { m1: { budget: 4, unbounded: true } } } };
+    await handleLiveQuotaError({ connectionId: "c1", provider: "glm", model: "m1", errorText: "GoUsageLimitError resets in 5h" });
+    const first = db.settings.detectedBudgets.c1.m1;
+    expect(first).toMatchObject({ budget: 0, quota: true, previousBudget: 4, unbounded: true });
+    const firstDetectedAt = first.detectedAt;
+    await handleLiveQuotaError({ connectionId: "c1", provider: "glm", model: "m1", errorText: "GoUsageLimitError resets in 2h" });
+    const second = db.settings.detectedBudgets.c1.m1;
+    expect(second.previousBudget).toBe(4);
+    expect(second.unbounded).toBe(true);
+    expect(second.detectedAt).toBe(firstDetectedAt);
+    // the queue dedupe replaced the entry with the newer, earlier reset
+    expect(new Date(db.settings.quotaRecheck[0].at).getTime()).toBeLessThan(Date.parse(firstDetectedAt) + 5 * 3600000);
+  });
+
+  it("two concurrent live collapses both persist (read-modify-write is serialized)", async () => {
+    // updateSettings merges at top-level key granularity, so two collapses
+    // whose maps are computed from the same pre-write snapshot replace — not
+    // merge — each other. The fixture's 10ms write gap forces exactly that
+    // interleave; without serialization the second patch clobbers lane c1.
+    db.settings = {};
+    await Promise.all([
+      handleLiveQuotaError({ connectionId: "c1", provider: "glm", model: "m1", errorText: "GoUsageLimitError resets in 5h" }),
+      handleLiveQuotaError({ connectionId: "c2", provider: "glm", model: "m2", errorText: "GoUsageLimitError resets in 6h" }),
+    ]);
+    expect(db.settings.detectedBudgets.c1.m1.quota).toBe(true);
+    expect(db.settings.detectedBudgets.c2.m2.quota).toBe(true);
+    expect(db.settings.quotaRecheck).toHaveLength(2);
   });
 
   it("collapses on resetsAtMs alone (GLM 1308) and enqueues when the reset is within 24h", async () => {
