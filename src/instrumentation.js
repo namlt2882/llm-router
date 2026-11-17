@@ -37,5 +37,14 @@ export async function register() {
     } catch (e) {
       console.warn("[CONCURRENCY] scheduler failed to start:", e?.message || e);
     }
+
+    // Patch #23: VND-per-USD floor rate for the credit price list; 6h refresh,
+    // fail-open like the schedulers above.
+    try {
+      const { startFxRefreshLoop } = await import("@/lib/fx/fxRate.js");
+      startFxRefreshLoop();
+    } catch (e) {
+      console.warn("[FX] refresh loop failed to start:", e?.message || e);
+    }
   }
 }
