@@ -113,6 +113,13 @@ const getPageInfo = (pathname) => {
       icon: "security",
       breadcrumbs: [],
     };
+  if (pathname.includes("/pricing"))
+    return {
+      title: "Pricing",
+      description: "Sale prices in credits and the exchange-rate floor",
+      icon: "sell",
+      breadcrumbs: [],
+    };
   if (pathname.includes("/token-saver"))
     return {
       title: "Token Saver",
