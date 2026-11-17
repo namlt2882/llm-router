@@ -265,11 +265,12 @@ export async function saveRequestUsage(entry) {
            AND COALESCE(apiKey, '') = COALESCE(?, '')
            AND promptTokens = ?
            AND completionTokens = ?
+           AND COALESCE(holdId, '') = COALESCE(?, '')
          ORDER BY id DESC LIMIT 1`,
         [
           entry.timestamp, entry.provider || null, entry.model || null,
           entry.connectionId || null, entry.apiKey || null,
-          promptTokens, completionTokens,
+          promptTokens, completionTokens, entry.holdId || null,
         ]
       );
 
@@ -281,12 +282,14 @@ export async function saveRequestUsage(entry) {
       }
 
       db.run(
-        `INSERT INTO usageHistory(timestamp, provider, model, connectionId, apiKey, endpoint, promptTokens, completionTokens, cost, status, tokens, meta) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO usageHistory(timestamp, provider, model, connectionId, apiKey, endpoint, promptTokens, completionTokens, cost, status, tokens, meta, holdId, costCredits) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           entry.timestamp, entry.provider || null, entry.model || null,
           entry.connectionId || null, entry.apiKey || null, entry.endpoint || null,
           promptTokens, completionTokens, entry.cost || 0, entry.status || "ok",
           stringifyJson(tokens), stringifyJson({}),
+          entry.holdId || null,
+          entry.costCredits === undefined || entry.costCredits === null ? null : String(entry.costCredits),
         ]
       );
 
