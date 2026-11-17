@@ -836,6 +836,8 @@ export async function getConcurrencyChartData(period = "7d") {
   const budgetSum = new Array(buckets.length).fill(0);
   const sampleCount = new Array(buckets.length).fill(0);
   const providerSum = buckets.map(() => ({}));
+  const providerPeak = buckets.map(() => ({}));
+  const totalPeak = new Array(buckets.length).fill(0);
   // Samples walked with a monotonic bucket pointer — findIndex per sample was
   // O(samples × buckets) and the table grows toward 60d ≈ 173k rows (review
   // minor M3). Sort first: the storage layer makes no ordering promise.
@@ -864,8 +866,11 @@ export async function getConcurrencyChartData(period = "7d") {
       inflightSum[b] += samples[sIdx].inflight;
       budgetSum[b] += samples[sIdx].budget;
       sampleCount[b] += 1;
+      totalPeak[b] = Math.max(totalPeak[b], samples[sIdx].inflight);
       for (const [pid, n] of Object.entries(samples[sIdx].split)) {
-        providerSum[b][pid] = (providerSum[b][pid] || 0) + (Number(n) || 0);
+        const v = Number(n) || 0;
+        providerSum[b][pid] = (providerSum[b][pid] || 0) + v;
+        providerPeak[b][pid] = Math.max(providerPeak[b][pid] || 0, v);
       }
       sIdx += 1;
     }
@@ -892,6 +897,8 @@ export async function getConcurrencyChartData(period = "7d") {
     return {
       label: b.label,
       concurrency: sampleCount[i] ? inflightSum[i] / sampleCount[i] : 0,
+      concurrencyPeak: totalPeak[i],
+      providersPeak: Object.fromEntries(Object.entries(providerPeak[i]).filter(([, v]) => v > 0)),
       providers: Object.fromEntries(
         Object.entries(providerSum[i]).filter(([, v]) => v > 0).map(([pid, v]) => [pid, v / sampleCount[i]]),
       ),

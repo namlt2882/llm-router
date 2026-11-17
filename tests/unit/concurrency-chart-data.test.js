@@ -99,6 +99,29 @@ describe("getConcurrencyChartData", () => {
     }
   });
 
+  it("reports the per-provider PEAK in each bucket next to the average", async () => {
+    const { usageRepo } = await loadRepo();
+    const base = Date.now() - 2.5 * 3600000;
+    // Five idle ticks and one burst: the average dilutes, the peak must not.
+    for (let i = 0; i < 5; i += 1) await usageRepo.recordConcurrencySample(0, 10, { now: new Date(base + i * 30000), byProvider: {} });
+    await usageRepo.recordConcurrencySample(6, 10, { now: new Date(base + 200000), byProvider: { glm: 4, oc: 2 } });
+    await usageRepo.recordConcurrencySample(3, 10, { now: new Date(base + 230000), byProvider: { glm: 1, oc: 2 } });
+    const out = await usageRepo.getConcurrencyChartData("24h");
+    const b = out.find((x) => Object.keys(x.providersPeak || {}).length);
+    expect(b.providersPeak).toEqual({ glm: 4, oc: 2 });
+    expect(b.concurrencyPeak).toBe(6);
+    expect(b.providers.glm).toBeCloseTo(5 / 7, 6); // average still available for the tooltip
+    expect(out.filter((x) => x.concurrencyPeak > 0)).toHaveLength(1);
+  });
+
+  it("a pre-005 row's peak is its whole total under unknown", async () => {
+    const { usageRepo } = await loadRepo();
+    const base = Date.now() - 2.5 * 3600000;
+    await usageRepo.recordConcurrencySample(4, 10, { now: new Date(base) });
+    const out = await usageRepo.getConcurrencyChartData("24h");
+    expect(out.find((x) => x.concurrencyPeak > 0).providersPeak).toEqual({ unknown: 4 });
+  });
+
   it("empty table → zeroed buckets with null rates, never NaN", async () => {
     const { usageRepo } = await loadRepo();
     const out = await usageRepo.getConcurrencyChartData("7d");

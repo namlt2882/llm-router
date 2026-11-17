@@ -64,26 +64,26 @@ export default function ConcurrencyChart({ period = "7d" }) {
   // "p:<id>" keys because Recharts stacks by dataKey, not by nested path.
   const { rows, providerIds } = useMemo(() => {
     const totals = {};
-    for (const d of data) for (const [pid, v] of Object.entries(d.providers || {})) totals[pid] = (totals[pid] || 0) + v;
+    for (const d of data) for (const [pid, v] of Object.entries(d.providersPeak || {})) totals[pid] = (totals[pid] || 0) + v;
     const ids = Object.keys(totals).sort((a, b) => totals[b] - totals[a] || a.localeCompare(b));
     return {
       providerIds: ids,
       rows: data.map((d) => ({
         ...d,
-        ...Object.fromEntries(ids.map((pid) => [PROVIDER_PREFIX + pid, d.providers?.[pid] || 0])),
+        ...Object.fromEntries(ids.map((pid) => [PROVIDER_PREFIX + pid, d.providersPeak?.[pid] || 0])),
       })),
     };
   }, [data]);
 
   const hasData = data.some(
-    (d) => (d.concurrency || 0) > 0 || d.utilityRate != null || (d.cumulativeTokens || 0) > 0 || (d.cumulativeCost || 0) > 0,
+    (d) => (d.concurrencyPeak || 0) > 0 || (d.concurrency || 0) > 0 || d.utilityRate != null || (d.cumulativeTokens || 0) > 0 || (d.cumulativeCost || 0) > 0,
   );
 
   return (
     <Card className="flex min-w-0 flex-col gap-3 p-3 sm:p-4">
       <div className="flex items-center justify-between gap-2">
         <span className="text-sm font-medium">Concurrency</span>
-        <span className="text-xs text-text-muted">cột chồng: TB phiên đồng thời theo provider · đường: % hạn mức, token &amp; chi phí luỹ kế (trong khoảng chọn)</span>
+        <span className="text-xs text-text-muted">cột chồng: đỉnh phiên đồng thời theo provider (tooltip kèm TB) · đường: % hạn mức, token &amp; chi phí luỹ kế (trong khoảng chọn)</span>
       </div>
       {loading ? (
         <div className="h-48 flex items-center justify-center text-text-muted text-sm">Loading...</div>
@@ -127,9 +127,13 @@ export default function ConcurrencyChart({ period = "7d" }) {
                 borderRadius: "8px",
                 fontSize: "12px",
               }}
-              formatter={(value, name) => {
+              formatter={(value, name, item) => {
                 if (value == null) return ["—", name];
-                if (providerIds.some((pid) => providerLabel(pid) === name)) return [Number(value).toFixed(2), name];
+                const pid = providerIds.find((id) => providerLabel(id) === name);
+                if (pid) {
+                  const avg = item?.payload?.providers?.[pid] || 0;
+                  return [`đỉnh ${value} · TB ${avg.toFixed(2)}`, name];
+                }
                 if (name === "Token luỹ kế") return [fmtTokens(value), name];
                 if (name === "Chi phí luỹ kế") return [fmtCost(value), name];
                 if (name === "% hạn mức") return [`${Number(value).toFixed(1)}%`, name];
@@ -138,7 +142,7 @@ export default function ConcurrencyChart({ period = "7d" }) {
             />
             <Legend wrapperStyle={{ fontSize: 11 }} />
             {providerIds.length === 0 ? (
-              <Bar yAxisId="left" dataKey="concurrency" name="Phiên đồng thời (TB)" fill="#6366f1" fillOpacity={0.7} />
+              <Bar yAxisId="left" dataKey="concurrencyPeak" name="Phiên đồng thời (đỉnh)" fill="#6366f1" fillOpacity={0.7} />
             ) : (
               providerIds.map((pid, i) => (
                 <Bar
