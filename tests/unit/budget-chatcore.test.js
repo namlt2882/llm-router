@@ -164,6 +164,20 @@ describe("chatCore under a WaveBot budget (fork patch #26)", { timeout: 20_000 }
     expect(row).toMatchObject({ holdId: "hold-1", costCredits: "140" });
   });
 
+  it("a call that omits stream and sends no Accept header is non-stream (OpenAI default) and still reports its cost", async () => {
+    const { handleChatCore } = await import("../../open-sse/handlers/chatCore.js");
+    executeMock.mockResolvedValue(jsonResult({ prompt_tokens: 100_000, completion_tokens: 10_000 }));
+    const p = parent(500);
+    const opts = makeOptions(p);
+    opts.clientRawRequest = { endpoint: "/v1/chat/completions", body: opts.body, headers: {} };
+    const result = await handleChatCore(opts);
+    expect(result.success).toBe(true);
+    expect(result.response.headers.get("x-wavebot-cost-credits")).toBe("140");
+    expect(result.response.headers.get("x-wavebot-hold-id")).toBe("hold-1");
+    expect(p.spent).toBe(140);
+    expect(saveUsageMock.mock.calls.map((c) => c[0]).find((r) => r.holdId)).toMatchObject({ holdId: "hold-1", costCredits: "140" });
+  });
+
   it("a stream is cut at the budget, ends with length and a stamped cost, and releases the attempt", async () => {
     const { handleChatCore } = await import("../../open-sse/handlers/chatCore.js");
     const chunks = [];

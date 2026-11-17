@@ -204,6 +204,11 @@ async function handleChatCoreInner({ budgetParent, budgetRef, body, modelInfo, c
     stream = false;
   }
 
+  // Fork patch #26: under a WaveBot budget an omitted `stream` means non-stream (the OpenAI/Anthropic
+  // default). Streaming it upstream would hand the cost stamp a JSON body it cannot parse as SSE events,
+  // and the caller would never learn what the call cost.
+  if (budgetParent && !clientRequestedStreaming && !providerRequiresStreaming) stream = false;
+
   const reqLogger = await createRequestLogger(sourceFormat, targetFormat, model);
   if (clientRawRequest) reqLogger.logClientRawRequest(clientRawRequest.endpoint, clientRawRequest.body, clientRawRequest.headers);
   reqLogger.logRawRequest(body);
