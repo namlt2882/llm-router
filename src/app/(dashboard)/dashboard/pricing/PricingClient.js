@@ -22,7 +22,7 @@ const FILTERS = [
 ];
 const BULK_ERRORS = {
   unsellable: "no base price",
-  in_promotion: "in a promotion, back it to auto first",
+  in_promotion: "in a promotion, end the promotion first",
   below_floor: "stored price is under the floor",
 };
 
@@ -130,8 +130,9 @@ export default function PricingClient() {
     return true;
   }
 
-  async function backToAuto(name) {
-    await call(`/api/fork/saleprice?name=${encodeURIComponent(name)}`, { method: "DELETE" });
+  async function backToAuto(row) {
+    if (row.status === "promo") await call("/api/fork/pricebulk", { method: "POST", body: JSON.stringify({ action: "revert", names: [row.name] }) });
+    else await call(`/api/fork/saleprice?name=${encodeURIComponent(row.name)}`, { method: "DELETE" });
     await load();
   }
 
@@ -299,7 +300,7 @@ export default function PricingClient() {
                   error={rowErrors[row.name]}
                   onToggle={() => toggle(row.name)}
                   onSave={(edit) => saveRow(row, edit)}
-                  onAuto={() => backToAuto(row.name)}
+                  onAuto={() => backToAuto(row)}
                 />
               ))}
               {visible.length === 0 && (
@@ -350,7 +351,7 @@ function PriceRow({ row, checked, flagged, error, onToggle, onSave, onAuto }) {
         <td className="py-1 pr-3"><StatusBadges row={row} flagged={flagged} /></td>
         <td className="py-1 text-right whitespace-nowrap">
           {!locked && <Button size="sm" variant="ghost" onClick={open ? () => setOpen(false) : startEdit}>{open ? "Close" : "Edit"}</Button>}
-          {!locked && row.stored && <Button size="sm" variant="ghost" onClick={onAuto}>Back to auto</Button>}
+          {!locked && row.stored && <Button size="sm" variant="ghost" onClick={onAuto}>{row.status === "promo" ? "End promotion" : "Back to auto"}</Button>}
         </td>
       </tr>
       {open && (

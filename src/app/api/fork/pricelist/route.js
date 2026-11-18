@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { assertForkAdmin } from "@/lib/forkAdminAuth";
 import { buildModelsList } from "@/app/api/v1/models/route.js";
-import { listSalePrices, setSalePrice, removeSalePrice } from "@/lib/db/repos/salePriceRepo.js";
+import { settleExpired } from "@/lib/pricing/settleExpired.js";
 import { defaultContext } from "@/lib/pricing/validateSalePrice.js";
 import { listPrices } from "@/lib/pricing/priceList.js";
 
@@ -27,12 +27,7 @@ export async function GET(request) {
     return fail(503, "fx_rate_unavailable");
   }
   const now = Date.now();
-  for (const row of await listSalePrices()) {
-    if (row.source === "promo" && row.endsAt <= now) {
-      if (row.restore) await setSalePrice(row.restore);
-      else await removeSalePrice(row.name);
-    }
-  }
+  await settleExpired({ now });
   const rows = await listPrices({ names: await servedNames(now), ctx, now });
   return NextResponse.json({ rows, rate: ctx.rate }, { headers: NO_STORE });
 }
