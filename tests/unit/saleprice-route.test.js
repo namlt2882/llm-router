@@ -89,6 +89,25 @@ describe("/api/fork/saleprice (USD)", () => {
     expect(await low.json()).toMatchObject({ error: "below_floor", field: "input", minimum: 3 });
   });
 
+  it("PUT keeps only known fields: no restore or endsAt, and only the markup source", async () => {
+    const { PUT, repo } = await loadRoute();
+    const res = await PUT(req("PUT", { body: usd({ source: "markup", pct: 5, label: "ops", endsAt: 9e15, restore: usd(), junk: 1 }) }));
+    expect(res.status).toBe(200);
+    expect(await repo.getSalePrice(NAME)).toEqual(usd({ source: "markup", pct: 5, label: "ops" }));
+    for (const source of ["promo", "other"]) {
+      const bad = await PUT(req("PUT", { body: usd({ source }) }));
+      expect(bad.status).toBe(400);
+      expect(await bad.json()).toMatchObject({ error: "invalid_source" });
+    }
+  });
+
+  it("PUT above the USD ceiling is 422 too_high", async () => {
+    const { PUT } = await loadRoute();
+    const res = await PUT(req("PUT", { body: usd({ input: 1_000_001 }) }));
+    expect(res.status).toBe(422);
+    expect(await res.json()).toMatchObject({ error: "too_high", field: "input", maximum: 1_000_000 });
+  });
+
   it("DELETE removes a price", async () => {
     const { PUT, DELETE, GET } = await loadRoute();
     await PUT(req("PUT", { body: usd() }));

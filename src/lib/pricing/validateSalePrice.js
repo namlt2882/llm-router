@@ -3,7 +3,7 @@ import { getPricingForModel } from "@/lib/db/repos/pricingRepo.js";
 import { getComboByName } from "@/lib/db/repos/combosRepo.js";
 import { listSalePrices } from "@/lib/db/repos/salePriceRepo.js";
 import { getPriceDefault } from "@/lib/db/repos/priceDefaultRepo.js";
-import { ceil6, toUsdRow, defaultBase } from "@/lib/pricing/priceUnit.js";
+import { ceil6, toUsdRow, defaultBase, MAX_USD_PRICE } from "@/lib/pricing/priceUnit.js";
 
 // Sale field -> base field (base prices are USD per 1M tokens, snake_case).
 const FIELDS = [
@@ -67,10 +67,12 @@ export async function validateSalePrice(entry, ctx) {
   for (const [field] of FIELDS) {
     const v = entry[field];
     if (typeof v !== "number" || !Number.isFinite(v) || v < 0) return { ok: false, field, reason: "invalid" };
+    if (v > MAX_USD_PRICE) return { ok: false, field, reason: "too_high", maximum: MAX_USD_PRICE };
   }
   if (entry.perImage !== undefined && !(typeof entry.perImage === "number" && Number.isFinite(entry.perImage) && entry.perImage >= 0)) {
     return { ok: false, field: "perImage", reason: "invalid" };
   }
+  if (entry.perImage > MAX_USD_PRICE) return { ok: false, field: "perImage", reason: "too_high", maximum: MAX_USD_PRICE };
   const { floor, error } = await costFloor(entry.name, entry.kind, ctx);
   if (error) return error;
   for (const [field] of FIELDS) {

@@ -131,6 +131,15 @@ describe("validateSalePrice (USD)", () => {
     expect(await validateSalePrice(c, ctxAt(25000))).toMatchObject({ ok: false, field: "name", reason: "combo_cycle" });
   });
 
+  it("refuses a price above 1,000,000 USD per 1M tokens (an old credit number saved as USD)", async () => {
+    const { validateSalePrice } = await load();
+    const c = ctxAt(25000);
+    expect(await validateSalePrice({ name: "cc/cheap", kind: "model", ...usd(1, base(1)), input: 1_000_000 }, c)).toEqual({ ok: true });
+    expect(await validateSalePrice({ name: "cc/cheap", kind: "model", ...usd(1, base(1)), output: 1_000_001 }, c)).toMatchObject({
+      ok: false, field: "output", reason: "too_high", maximum: 1_000_000,
+    });
+  });
+
   it("refuses a missing or non-numeric field and a kind that does not match the name", async () => {
     const { validateSalePrice } = await load();
     const good = { name: "cc/cheap", kind: "model", ...usd(1, BASES["cc/cheap"]) };

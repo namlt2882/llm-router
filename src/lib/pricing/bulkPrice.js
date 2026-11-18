@@ -64,7 +64,7 @@ export async function applyBulk(
     if (action === "markup") {
       const price = { ...core, ...scale(base, 100 + pct, ceil6), source: "markup", ...(label ? { label } : {}), pct };
       const verdict = await validateSalePrice(price, ctx);
-      if (!verdict.ok) return { name, ok: false, error: verdict.reason === "unsellable" ? "unsellable" : "below_floor" };
+      if (!verdict.ok) return { name, ok: false, error: verdict.minimum !== undefined ? "below_floor" : verdict.reason };
       await save(price);
       return { name, ok: true, price, belowFloor: false };
     }

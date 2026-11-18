@@ -13,7 +13,11 @@ async function load() {
 const fake = (rows) => {
   const store = new Map(rows.map((r) => [r.name, r]));
   const set = vi.fn(async (r) => { store.set(r.name, r); });
-  return { store, set, list: async () => [...store.values()], get: async (n) => store.get(n) ?? null };
+  const update = vi.fn(async (name, fn) => {
+    const next = fn(store.get(name) ?? null);
+    if (next !== undefined) await set(next);
+  });
+  return { store, set, update, list: async () => [...store.values()], get: async (n) => store.get(n) ?? null };
 };
 
 describe("migrateLegacyPrices", () => {
@@ -39,9 +43,16 @@ describe("migrateLegacyPrices", () => {
   it("skips a row that a concurrent PUT turned into USD after the list", async () => {
     const { migrateLegacyPrices } = await load();
     const f = fake([legacy("cc/a")]);
-    const racing = { ...f, get: async () => usd("cc/a") };
+    const racing = { ...f, update: async (name, fn) => { const next = fn(usd(name)); if (next !== undefined) await f.set(next); } };
     expect(await migrateLegacyPrices({ rate: 25000, ...racing })).toBe(0);
     expect(f.set).not.toHaveBeenCalled();
+  });
+
+  it("decides inside one atomic update, so a PUT can never be overwritten between a read and a write", async () => {
+    const { migrateLegacyPrices } = await load();
+    const f = fake([legacy("cc/a")]);
+    await migrateLegacyPrices({ rate: 25000, ...f });
+    expect(f.update).toHaveBeenCalledWith("cc/a", expect.any(Function));
   });
 
   it("writes nothing without a positive finite rate", async () => {

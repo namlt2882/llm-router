@@ -2,6 +2,9 @@ export const TOKEN_FIELDS = ["input", "output", "cached", "reasoning", "cacheCre
 export const FIELDS = [...TOKEN_FIELDS, "perImage"];
 export const DEFAULT_BASE_SETTING = { enabled: false, input: 0.05, cached: 0.005, output: 0.1 };
 
+/** Highest USD price per 1M tokens (or per image) that may be stored; above it the number is almost certainly a credit amount. */
+export const MAX_USD_PRICE = 1_000_000;
+
 const NOISE = 1e-12;
 
 // Round up to 6 decimals; the relative guard keeps float noise (0.30000000000000004) from adding a micro-unit.

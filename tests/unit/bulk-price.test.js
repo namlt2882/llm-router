@@ -102,6 +102,14 @@ describe("applyBulk markup", () => {
   });
 });
 
+describe("applyBulk markup refusal reasons", () => {
+  it("reports too_high, not below_floor, when the markup pushes a price over the ceiling", async () => {
+    const s = store([row({ input: 999_999, output: 999_999, cached: 999_999, reasoning: 999_999, cacheCreation: 999_999 })]);
+    const { results } = await run(s, { action: "markup", names: ["cc/cheap"], pct: 10 });
+    expect(results[0]).toMatchObject({ ok: false, error: "too_high" });
+  });
+});
+
 describe("applyBulk promo", () => {
   it("discounts an auto price, may end under the floor, and flags it", async () => {
     const s = store();
