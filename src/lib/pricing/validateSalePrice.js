@@ -82,10 +82,12 @@ export async function validateSalePrice(entry, ctx) {
   return { ok: true };
 }
 
-/** Rows that fall below the floor after a base change (a legacy credit row is judged at the current rate). Never rewritten. */
+/** Rows that fall below the floor after a base change (a legacy credit row is judged at the current rate). Never rewritten. A running promotion is under cost on purpose and is not a fault. */
 export async function listFlagged(ctx) {
   const out = [];
+  const now = ctx.now ?? Date.now();
   for (const row of await listSalePrices()) {
+    if (row.source === "promo" && row.endsAt > now) continue;
     const violation = await validateSalePrice(toUsdRow(row, ctx.rate), ctx);
     if (!violation.ok) out.push({ ...row, violation });
   }

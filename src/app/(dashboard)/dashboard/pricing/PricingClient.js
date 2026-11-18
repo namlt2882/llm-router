@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Badge, Button, Card, Input, Select } from "@/shared/components";
 import { filterRows } from "./filterRows.js";
 import { fmtUsd, parseDefaultBase, showPrice } from "./formatPrice.js";
-import { ceil6, round6 } from "@/lib/pricing/priceUnit.js";
+import { bulkPreview, selectedVisible } from "./bulkPreview.js";
 
 const FIELDS = [
   ["input", "Input"],
@@ -51,14 +51,6 @@ async function call(url, options) {
   return { ok: res.ok, status: res.status, data };
 }
 
-// What a bulk action would write for the first price field in USD, mirroring the server (markup ceil6, promo round6).
-function previewOf(row, action, pct) {
-  const base = row.status === "promo" ? (row.stored.restore ?? row.floor) : row.effective;
-  if (!base || !Number.isFinite(pct) || pct <= 0) return null;
-  const next = action === "markup" ? ceil6((base.input * (100 + pct)) / 100) : round6((base.input * (100 - pct)) / 100);
-  return { from: row.effective?.input, to: next, under: row.floor ? next < row.floor.input : false };
-}
-
 export default function PricingClient() {
   const [rows, setRows] = useState([]);
   const [flagged, setFlagged] = useState([]);
@@ -98,7 +90,8 @@ export default function PricingClient() {
 
   const visible = useMemo(() => filterRows(rows, { q, filter }), [rows, q, filter]);
   const sellable = useMemo(() => visible.filter((r) => r.status !== "no_base_price"), [visible]);
-  const chosen = useMemo(() => rows.filter((r) => selected.has(r.name) && r.status !== "no_base_price"), [rows, selected]);
+  const chosen = useMemo(() => selectedVisible(visible, selected), [visible, selected]);
+  const hiddenSelected = selected.size - chosen.length;
   const allChosen = sellable.length > 0 && sellable.every((r) => selected.has(r.name));
 
   const toggle = (name) =>
@@ -145,8 +138,8 @@ export default function PricingClient() {
   const pct = Number(bulk.pct);
   const bulkReady =
     chosen.length > 0 && Number.isFinite(pct) && pct > 0 && (bulk.action === "markup" ? pct <= 500 : pct <= 100 && bulk.endsOn >= today);
-  const previews = bulkReady ? chosen.slice(0, 5).map((r) => ({ row: r, ...previewOf(r, bulk.action, pct) })) : [];
-  const underFloorCount = bulkReady && bulk.action === "promo" ? chosen.filter((r) => previewOf(r, "promo", pct)?.under).length : 0;
+  const previews = bulkReady ? chosen.slice(0, 5).map((r) => ({ row: r, ...bulkPreview(r, bulk.action, pct) })) : [];
+  const underFloorCount = bulkReady && bulk.action === "promo" ? chosen.filter((r) => bulkPreview(r, "promo", pct)?.under).length : 0;
 
   async function applyBulk() {
     setBusy(true);
@@ -254,7 +247,7 @@ export default function PricingClient() {
             {defaultMsg && <span className="pb-2 text-xs text-text-muted">{defaultMsg}</span>}
           </div>
           <p className="text-xs text-text-muted">
-            Applies only to names with no base pricing; a name with a real base price, even a free one, is never touched. Reasoning follows output and cache write follows input. A combo averages its members, so one member on the default base moves the whole combo.
+            A name with no base pricing has an unknown cost, so it cannot be sold while this is off; while it is on, every such name sells at these prices, and there is no per-name opt-out. A name with a real base price, even a free one, is never touched. Reasoning follows output and cache write follows input. A combo averages its members, so one member on the default base moves the whole combo.
           </p>
         </div>
       </Card>
@@ -297,11 +290,16 @@ export default function PricingClient() {
                 {previews.map((p) => (
                   <li key={p.row.name}>
                     <span className="font-mono">{p.row.name}</span> input {showPrice(p.from, mode, fx?.rate)} → {showPrice(p.to, mode, fx?.rate)}
-                    {p.under && <span className="text-red-500"> (under the floor)</span>}
+                    {p.skip ? <span className="text-red-500"> (skipped: in a promotion)</span> : p.under && <span className="text-red-500"> (under the floor)</span>}
                   </li>
                 ))}
                 {chosen.length > previews.length && <li>and {chosen.length - previews.length} more</li>}
               </ul>
+            )}
+            {hiddenSelected > 0 && (
+              <p className="text-xs text-text-muted" data-testid="bulk-hidden">
+                {hiddenSelected} selected name{hiddenSelected > 1 ? "s are" : " is"} hidden by the search or filter and will not be changed.
+              </p>
             )}
             {underFloorCount > 0 && (
               <p className="text-xs text-red-500" data-testid="bulk-warning">
@@ -416,7 +414,7 @@ function PriceRow({ row, mode, rate, checked, flagged, error, onToggle, onSave, 
             <div className="flex flex-wrap items-end gap-3">
               {FIELDS.map(([k, label]) => (
                 <label key={k} className="flex flex-col text-xs text-text-muted">
-                  {k === "perImage" ? label : `${label} (USD)`}
+                  {`${label} (USD)`}
                   <input
                     aria-label={`${row.name} ${k}`}
                     type="number"

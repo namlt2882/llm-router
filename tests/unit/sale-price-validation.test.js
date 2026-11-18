@@ -188,6 +188,17 @@ describe("sale price store", () => {
     expect(await repo.getSalePrice("cc/cheap")).toMatchObject({ input: 24999 });
   });
 
+  it("listFlagged leaves a deliberate promotion out: it is under cost on purpose and the row badge already says so", async () => {
+    vi.resetModules();
+    const repo = await import("@/lib/db/repos/salePriceRepo.js");
+    const { listFlagged } = await import("@/lib/pricing/validateSalePrice.js");
+    const cheap = BASES["cc/cheap"];
+    await repo.setSalePrice({ name: "cc/cheap", kind: "model", ...usd(0.5, cheap), source: "promo", pct: 50, endsAt: Date.now() + 1e6, restore: null });
+    expect(await listFlagged(ctxAt(25000))).toEqual([]);
+    await repo.setSalePrice({ name: "cc/cheap", kind: "model", ...usd(0.5, cheap), source: "markup", pct: 0 });
+    expect((await listFlagged(ctxAt(25000))).map((f) => f.name)).toEqual(["cc/cheap"]);
+  });
+
   it("getSalePrice is null for an unpriced name and delete removes the row", async () => {
     vi.resetModules();
     const repo = await import("@/lib/db/repos/salePriceRepo.js");
