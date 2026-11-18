@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { assertForkAdmin } from "@/lib/forkAdminAuth";
-import { getSalePrice } from "@/lib/db/repos/salePriceRepo.js";
+import { effectiveSalePrice } from "@/lib/pricing/effectiveSalePrice.js";
 import { getFloorRate } from "@/lib/fx/fxRate.js";
 
 const NO_STORE = { "Cache-Control": "no-store" };
@@ -28,7 +28,7 @@ export async function POST(request) {
   if (typeof body?.model !== "string" || !body.model || [inputTokens, maxTokens, reasoning, images].includes(null)) {
     return fail(400, "model, inputTokens and maxTokens are required non-negative numbers");
   }
-  const sale = await getSalePrice(body.model);
+  const sale = await effectiveSalePrice(body.model);
   if (!sale) return fail(402, "not_sellable");
   let rate;
   try {
@@ -41,7 +41,7 @@ export async function POST(request) {
   return NextResponse.json(
     {
       creditsWorstCase,
-      sale: { input: sale.input, output: sale.output, cached: sale.cached, reasoning: sale.reasoning, cacheCreation: sale.cacheCreation, perImage: sale.perImage || 0 },
+      sale: { input: sale.input, output: sale.output, cached: sale.cached, reasoning: sale.reasoning, cacheCreation: sale.cacheCreation, perImage: sale.perImage || 0, ...(sale.auto ? { auto: true } : {}) },
       floorRate: rate,
     },
     { headers: NO_STORE },

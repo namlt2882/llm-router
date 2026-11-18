@@ -9,7 +9,7 @@ import {
 } from "../services/auth.js";
 import { parsePriority } from "../services/accountInflight.js";
 import { gateBudget, budgetRefusalResponse, setBudgetCtx, getBudgetCtx } from "open-sse/utils/budget.js";
-import { getSalePrice } from "@/lib/db/repos/salePriceRepo.js";
+import { effectiveSalePrice } from "@/lib/pricing/effectiveSalePrice.js";
 import { fanoutCtxForEntry } from "../services/fanoutBudget.js";
 import { orderModelsByHeadroom, rememberServedModel } from "../services/fanoutModels.js";
 import { handleAntigravityQuotaError, clearAntigravityStrikes } from "../services/antigravityQuota.js";
@@ -114,7 +114,7 @@ export async function handleChat(request, clientRawRequest = null) {
   // Fork patch #26: WaveBot spend ceiling. A budget that is present is always honoured; with
   // settings.requireBudget on, a call without one is refused. The price is the REQUESTED name's
   // sale price (a combo is priced as itself, whichever member serves it).
-  const budgetGate = await gateBudget({ headers: request.headers, model: modelStr, enforce: !!settings.requireBudget, getSale: getSalePrice });
+  const budgetGate = await gateBudget({ headers: request.headers, model: modelStr, enforce: !!settings.requireBudget, getSale: effectiveSalePrice });
   if (!budgetGate.ok) {
     log.warn("BUDGET", `${budgetGate.code} for ${modelStr}`);
     return budgetRefusalResponse(budgetGate);

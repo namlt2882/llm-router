@@ -88,6 +88,16 @@ describe("POST /api/fork/quote", () => {
     expect(await res.json()).toMatchObject({ error: "not_sellable" });
   });
 
+  it("quotes an unset model at its auto price (base x floor rate) and flags it auto", async () => {
+    const { POST } = await loadRoute();
+    const res = await POST(post({ model: "cc/claude-sonnet-4-6", inputTokens: 1_000_000, maxTokens: 0 }));
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    // base input $3 per 1M x rate 25500
+    expect(body.creditsWorstCase).toBe(76_500);
+    expect(body.sale).toMatchObject({ input: 76_500, output: 382_500, auto: true });
+  });
+
   it("400 on malformed numbers or JSON", async () => {
     const { POST } = await loadRoute();
     for (const bad of [{ model: "cc/cheap", inputTokens: -1, maxTokens: 1 }, { model: "cc/cheap", inputTokens: 1, maxTokens: "x" }, { inputTokens: 1, maxTokens: 1 }, { model: "cc/cheap", inputTokens: 1e18, maxTokens: 1 }, "{nope"]) {
