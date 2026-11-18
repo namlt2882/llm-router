@@ -1,7 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 
 const base = (n) => ({ input: n, output: n * 4, cached: n / 10, reasoning: n * 4, cache_creation: n * 1.25 });
-const BASES = { "cc/cheap": base(1), "cc/dear": base(10) };
+const BASES = {
+  "cc/cheap": base(1),
+  "cc/dear": base(10),
+  "cc/third": { input: 1 / 3, output: 1, cached: 0.1, reasoning: 1, cache_creation: 0.5 },
+};
 const COMBOS = { mixed: ["cc/cheap", "cc/dear"] };
 const ctx = (rate = 25000) => ({
   rate,
@@ -10,6 +14,9 @@ const ctx = (rate = 25000) => ({
 });
 
 const row = (over = {}) => ({
+  name: "cc/cheap", kind: "model", unit: "usd", input: 1.2, output: 4.8, cached: 0.12, reasoning: 4.8, cacheCreation: 1.5, perImage: 0, ...over,
+});
+const legacyRow = (over = {}) => ({
   name: "cc/cheap", kind: "model", input: 30000, output: 120000, cached: 3000, reasoning: 120000, cacheCreation: 37500, perImage: 0, ...over,
 });
 
@@ -40,24 +47,29 @@ describe("applyBulk markup", () => {
     expect(results).toHaveLength(1);
     expect(results[0]).toMatchObject({ name: "cc/cheap", ok: true, belowFloor: false });
     expect(s.m.get("cc/cheap")).toEqual({
-      name: "cc/cheap", kind: "model", input: 27500, output: 110000, cached: 2750, reasoning: 110000, cacheCreation: 34375, perImage: 0,
+      name: "cc/cheap", kind: "model", unit: "usd", input: 1.1, output: 4.4, cached: 0.11, reasoning: 4.4, cacheCreation: 1.375, perImage: 0,
       source: "markup", label: "ops cost", pct: 10,
     });
   });
 
-  it("applies on top of a stored price", async () => {
+  it("applies on top of a stored USD price", async () => {
     const s = store([row()]);
     await run(s, { action: "markup", names: ["cc/cheap"], pct: 10 });
-    expect(s.m.get("cc/cheap")).toMatchObject({ input: 33000, output: 132000, source: "markup" });
+    expect(s.m.get("cc/cheap")).toMatchObject({ unit: "usd", input: 1.32, output: 5.28, source: "markup" });
+  });
+
+  it("a legacy credit row in the store is marked up in USD and stored as USD", async () => {
+    const s = store([legacyRow()]);
+    await run(s, { action: "markup", names: ["cc/cheap"], pct: 10 });
+    expect(s.m.get("cc/cheap")).toMatchObject({ unit: "usd", input: 1.32, source: "markup" });
   });
 
   it("rounds up so a fractional floor is never undercut", async () => {
     const s = store();
-    const c = ctx(25000.6);
-    const { results } = await run(s, { action: "markup", names: ["cc/cheap"], pct: 0.001 }, { c });
+    const { results } = await run(s, { action: "markup", names: ["cc/third"], pct: 0.001 });
     expect(results[0].ok).toBe(true);
     const { validateSalePrice } = await import("@/lib/pricing/validateSalePrice.js");
-    expect(await validateSalePrice(s.m.get("cc/cheap"), c)).toEqual({ ok: true });
+    expect(await validateSalePrice(s.m.get("cc/third"), ctx())).toEqual({ ok: true });
   });
 
   it("refuses a name in an active promotion and writes nothing", async () => {
@@ -69,9 +81,9 @@ describe("applyBulk markup", () => {
   });
 
   it("applies on the restore base when the promotion has expired", async () => {
-    const s = store([row({ source: "promo", endsAt: 1000, restore: row({ input: 30000 }) })]);
+    const s = store([row({ source: "promo", endsAt: 1000, restore: row({ input: 1.2 }) })]);
     await run(s, { action: "markup", names: ["cc/cheap"], pct: 10 });
-    expect(s.m.get("cc/cheap")).toMatchObject({ input: 33000, source: "markup" });
+    expect(s.m.get("cc/cheap")).toMatchObject({ input: 1.32, source: "markup" });
   });
 
   it("applies the rest of the batch when one name is unsellable", async () => {
@@ -84,7 +96,7 @@ describe("applyBulk markup", () => {
   });
 
   it("refuses a stored price that sits under the floor and stays under it", async () => {
-    const s = store([row({ input: 1, output: 1, cached: 1, reasoning: 1, cacheCreation: 1 })]);
+    const s = store([row({ input: 0.01, output: 0.01, cached: 0.01, reasoning: 0.01, cacheCreation: 0.01 })]);
     const { results } = await run(s, { action: "markup", names: ["cc/cheap"], pct: 10 });
     expect(results[0]).toMatchObject({ ok: false, error: "below_floor" });
   });
@@ -96,7 +108,7 @@ describe("applyBulk promo", () => {
     const { results } = await run(s, { action: "promo", names: ["cc/cheap"], pct: 20, label: "launch", endsAt: 5000 });
     expect(results[0]).toMatchObject({ ok: true, belowFloor: true });
     expect(s.m.get("cc/cheap")).toEqual({
-      name: "cc/cheap", kind: "model", input: 20000, output: 80000, cached: 2000, reasoning: 80000, cacheCreation: 25000, perImage: 0,
+      name: "cc/cheap", kind: "model", unit: "usd", input: 0.8, output: 3.2, cached: 0.08, reasoning: 3.2, cacheCreation: 1, perImage: 0,
       source: "promo", label: "launch", pct: 20, endsAt: 5000, restore: null,
     });
   });
@@ -106,14 +118,14 @@ describe("applyBulk promo", () => {
     const s = store([prior]);
     const { results } = await run(s, { action: "promo", names: ["cc/cheap"], pct: 10, endsAt: 5000 });
     expect(results[0]).toMatchObject({ ok: true, belowFloor: false });
-    expect(s.m.get("cc/cheap")).toMatchObject({ input: 27000, source: "promo", restore: prior });
+    expect(s.m.get("cc/cheap")).toMatchObject({ input: 1.08, source: "promo", restore: prior });
   });
 
   it("a second promotion discounts the original price and keeps the original restore", async () => {
     const s = store();
     await run(s, { action: "promo", names: ["cc/cheap"], pct: 20, endsAt: 5000 });
     await run(s, { action: "promo", names: ["cc/cheap"], pct: 50, endsAt: 6000 });
-    expect(s.m.get("cc/cheap")).toMatchObject({ input: 12500, endsAt: 6000, restore: null, pct: 50 });
+    expect(s.m.get("cc/cheap")).toMatchObject({ input: 0.5, endsAt: 6000, restore: null, pct: 50 });
   });
 });
 
@@ -127,7 +139,7 @@ describe("applyBulk revert", () => {
 
   it("restores the prior row of an active promotion", async () => {
     const prior = row();
-    const s = store([row({ source: "promo", endsAt: 5000, restore: prior, input: 1 })]);
+    const s = store([row({ source: "promo", endsAt: 5000, restore: prior, input: 0.01 })]);
     await run(s, { action: "revert", names: ["cc/cheap"] });
     expect(s.m.get("cc/cheap")).toBe(prior);
   });
@@ -140,11 +152,18 @@ describe("applyBulk revert", () => {
 });
 
 describe("belowFloor", () => {
-  it("is true when any token field is under the floor, false at the floor, false with no floor", async () => {
+  const at = (input) => ({ name: "cc/cheap", kind: "model", unit: "usd", input, output: 4, cached: 0.1, reasoning: 4, cacheCreation: 1.25 });
+
+  it("is true a micro-unit under the floor, false at it, false with no floor", async () => {
     const { belowFloor } = await load();
-    const c = ctx();
-    expect(await belowFloor({ name: "cc/cheap", kind: "model", input: 24999, output: 100000, cached: 2500, reasoning: 100000, cacheCreation: 31250 }, c)).toBe(true);
-    expect(await belowFloor({ name: "cc/cheap", kind: "model", input: 25000, output: 100000, cached: 2500, reasoning: 100000, cacheCreation: 31250 }, c)).toBe(false);
-    expect(await belowFloor({ name: "cc/unknown", kind: "model", input: 0, output: 0, cached: 0, reasoning: 0, cacheCreation: 0 }, c)).toBe(false);
+    expect(await belowFloor(at(0.999999), ctx())).toBe(true);
+    expect(await belowFloor(at(1), ctx())).toBe(false);
+    expect(await belowFloor({ name: "cc/unknown", kind: "model", unit: "usd", input: 0, output: 0, cached: 0, reasoning: 0, cacheCreation: 0 }, ctx())).toBe(false);
+  });
+
+  it("does not depend on the FX rate", async () => {
+    const { belowFloor } = await load();
+    expect(await belowFloor(at(1), ctx(25000))).toBe(false);
+    expect(await belowFloor(at(1), ctx(40000))).toBe(false);
   });
 });

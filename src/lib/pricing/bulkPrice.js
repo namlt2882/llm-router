@@ -1,12 +1,9 @@
 import { getSalePrice, setSalePrice, removeSalePrice } from "@/lib/db/repos/salePriceRepo.js";
 import { costFloor, validateSalePrice } from "@/lib/pricing/validateSalePrice.js";
-import { effectiveSalePrice, resolveStored } from "@/lib/pricing/effectiveSalePrice.js";
+import { effectiveUsdPrice, resolveStored } from "@/lib/pricing/effectiveSalePrice.js";
+import { FIELDS, TOKEN_FIELDS, ceil6, round6, toUsdRow } from "@/lib/pricing/priceUnit.js";
 
-const FIELDS = ["input", "output", "cached", "reasoning", "cacheCreation", "perImage"];
-const TOKEN_FIELDS = FIELDS.slice(0, 5);
-const EPS = 1e-12;
-
-/** True when any token field sits under the cost floor; false when the name has no floor. */
+/** True when any token field of a USD price sits under the USD cost floor; false when the name has no floor. */
 export async function belowFloor(price, ctx) {
   const { floor, error } = await costFloor(price.name, price.kind, ctx);
   if (error) return false;
@@ -21,9 +18,6 @@ function scale(base, factor, round) {
   return out;
 }
 
-// Float noise (25000 * 110 / 100 = 27500.000000000004) must not push a ceil up a whole credit.
-const ceil = (x) => Math.ceil(x * (1 - EPS));
-
 /**
  * Apply a markup, a timed promotion, or a revert to many names at once by writing stored prices.
  * One name failing never blocks the others; each reports its own result.
@@ -33,6 +27,12 @@ export async function applyBulk(
   { stored = getSalePrice, save = setSalePrice, drop = removeSalePrice, ctx, now = Date.now() } = {},
 ) {
   const results = [];
+  // A legacy credit row (and its restore) is read as USD at the context rate before any math.
+  const toUsd = (row) => {
+    if (!row || row.unit === "usd") return row ?? null;
+    if (!Number.isFinite(ctx.rate) || !(ctx.rate > 0)) throw new Error("no_rate");
+    return toUsdRow(row, ctx.rate);
+  };
   for (const name of [...new Set(names)]) {
     try {
       results.push(await applyOne(name));
@@ -43,30 +43,32 @@ export async function applyBulk(
   return { results };
 
   async function applyOne(name) {
-    const raw = await stored(name);
+    const original = await stored(name);
     if (action === "revert") {
+      const raw = original;
       const back = raw?.source === "promo" ? (raw.restore ?? null) : null;
       if (back) await save(back);
       else if (raw) await drop(name);
       return { name, ok: true };
     }
+    const raw = toUsd(original);
     if (action === "markup" && isActivePromo(raw, now)) return { name, ok: false, error: "in_promotion" };
 
     const current = resolveStored(raw, now);
     const promoActive = action === "promo" && isActivePromo(raw, now);
     const prior = promoActive ? (raw.restore ?? null) : current;
-    const base = prior ?? (await effectiveSalePrice(name, { stored: async () => null, ctx, now }));
+    const base = prior ?? (await effectiveUsdPrice(name, { stored: async () => null, ctx, now }));
     if (!base) return { name, ok: false, error: "unsellable" };
 
-    const core = { name, kind: base.kind };
+    const core = { name, kind: base.kind, unit: "usd" };
     if (action === "markup") {
-      const price = { ...core, ...scale(base, 100 + pct, ceil), source: "markup", ...(label ? { label } : {}), pct };
+      const price = { ...core, ...scale(base, 100 + pct, ceil6), source: "markup", ...(label ? { label } : {}), pct };
       const verdict = await validateSalePrice(price, ctx);
       if (!verdict.ok) return { name, ok: false, error: verdict.reason === "unsellable" ? "unsellable" : "below_floor" };
       await save(price);
       return { name, ok: true, price, belowFloor: false };
     }
-    const price = { ...core, ...scale(base, 100 - pct, Math.round), source: "promo", ...(label ? { label } : {}), pct, endsAt, restore: prior ?? null };
+    const price = { ...core, ...scale(base, 100 - pct, round6), source: "promo", ...(label ? { label } : {}), pct, endsAt, restore: prior ?? null };
     await save(price);
     return { name, ok: true, price, belowFloor: await belowFloor(price, ctx) };
   }
