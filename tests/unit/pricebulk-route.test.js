@@ -93,8 +93,8 @@ describe("POST /api/fork/pricebulk", () => {
     expect(res.status).toBe(200);
     const { results } = await res.json();
     expect(results[0]).toMatchObject({ name: NAME, ok: true });
-    // floor input = 3 x 25500 = 76500; x1.1 = 84150
-    expect(await repo.getSalePrice(NAME)).toMatchObject({ input: 84150, source: "markup", pct: 10 });
+    // floor input = $3 per 1M; x1.1 = $3.3
+    expect(await repo.getSalePrice(NAME)).toMatchObject({ unit: "usd", input: 3.3, source: "markup", pct: 10 });
   });
 
   it("promo saves restore and endsAt and reports belowFloor", async () => {
@@ -102,7 +102,7 @@ describe("POST /api/fork/pricebulk", () => {
     const endsAt = FUTURE();
     const { results } = await (await POST(post({ action: "promo", names: [NAME], pct: 20, endsAt }))).json();
     expect(results[0]).toMatchObject({ ok: true, belowFloor: true });
-    expect(await repo.getSalePrice(NAME)).toMatchObject({ input: 61200, source: "promo", endsAt, restore: null });
+    expect(await repo.getSalePrice(NAME)).toMatchObject({ unit: "usd", input: 2.4, source: "promo", endsAt, restore: null });
   });
 
   it("reports a name without base pricing per name and still 200s", async () => {

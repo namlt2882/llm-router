@@ -38,7 +38,8 @@ async function loadRoute({ fxFails = false } = {}) {
   }));
   const repo = await import("@/lib/db/repos/salePriceRepo.js");
   const route = await import("@/app/api/fork/pricelist/route.js");
-  return { GET: route.GET, repo };
+  const defaults = await import("@/lib/db/repos/priceDefaultRepo.js");
+  return { GET: route.GET, repo, defaults };
 }
 
 const get = ({ token = "secret-token" } = {}) =>
@@ -70,13 +71,13 @@ describe("GET /api/fork/pricelist", () => {
     expect(res.status).toBe(200);
     const { rows, rate } = await res.json();
     expect(rate).toBe(25500);
-    expect(rows.find((r) => r.name === "cc/claude-sonnet-4-6")).toMatchObject({ kind: "model", status: "auto", floor: { input: 76500 } });
+    expect(rows.find((r) => r.name === "cc/claude-sonnet-4-6")).toMatchObject({ kind: "model", status: "auto", floor: { input: 3 } });
     expect(rows.find((r) => r.name === "cc/unknown")).toMatchObject({ status: "no_base_price" });
   });
 
   it("removes an expired promotion row from the store when listing", async () => {
     const { GET, repo } = await loadRoute();
-    await repo.setSalePrice({ name: "cc/claude-sonnet-4-6", kind: "model", input: 1, output: 1, cached: 1, reasoning: 1, cacheCreation: 1, source: "promo", endsAt: 1, restore: null });
+    await repo.setSalePrice({ name: "cc/claude-sonnet-4-6", kind: "model", unit: "usd", input: 1, output: 1, cached: 1, reasoning: 1, cacheCreation: 1, source: "promo", endsAt: 1, restore: null });
     const { rows } = await (await GET(get())).json();
     expect(rows.find((r) => r.name === "cc/claude-sonnet-4-6")).toMatchObject({ status: "auto" });
     expect(await repo.getSalePrice("cc/claude-sonnet-4-6")).toBeNull();
@@ -84,10 +85,33 @@ describe("GET /api/fork/pricelist", () => {
 
   it("puts the restore row back when an expired promotion had one", async () => {
     const { GET, repo } = await loadRoute();
-    const restore = { name: "cc/claude-sonnet-4-6", kind: "model", input: 90000, output: 400000, cached: 9000, reasoning: 400000, cacheCreation: 100000, perImage: 0 };
+    const restore = { name: "cc/claude-sonnet-4-6", kind: "model", unit: "usd", input: 4, output: 16, cached: 0.4, reasoning: 16, cacheCreation: 5, perImage: 0 };
     await repo.setSalePrice({ ...restore, input: 1, source: "promo", endsAt: 1, restore });
     await GET(get());
     expect(await repo.getSalePrice("cc/claude-sonnet-4-6")).toEqual(restore);
+  });
+
+  it("returns a stored legacy credit row as USD and rewrites it in the store", async () => {
+    const { GET, repo } = await loadRoute();
+    await repo.setSalePrice({ name: "cc/claude-sonnet-4-6", kind: "model", input: 102000, output: 510000, cached: 10200, reasoning: 510000, cacheCreation: 127500, perImage: 0 });
+    const { rows } = await (await GET(get())).json();
+    const r = rows.find((x) => x.name === "cc/claude-sonnet-4-6");
+    expect(r).toMatchObject({ status: "custom", stored: { unit: "usd", input: 4 }, effective: { unit: "usd", input: 4 } });
+    expect(await repo.getSalePrice("cc/claude-sonnet-4-6")).toMatchObject({ unit: "usd", input: 4 });
+  });
+
+  it("carries the default base setting, off by default with the three factory prices", async () => {
+    const { GET } = await loadRoute();
+    expect((await (await GET(get())).json()).default).toEqual({ enabled: false, input: 0.05, cached: 0.005, output: 0.1 });
+  });
+
+  it("a served name with no base is auto with defaultBase once the default is enabled", async () => {
+    const { GET, defaults } = await loadRoute();
+    await defaults.setPriceDefault({ enabled: true });
+    const { rows, default: d } = await (await GET(get())).json();
+    expect(d.enabled).toBe(true);
+    expect(rows.find((r) => r.name === "cc/unknown")).toMatchObject({ status: "auto", defaultBase: true, floor: { input: 0.05, cached: 0.005, output: 0.1 } });
+    expect(rows.find((r) => r.name === "cc/claude-sonnet-4-6").defaultBase).toBe(false);
   });
 
   it("503 without a floor rate", async () => {

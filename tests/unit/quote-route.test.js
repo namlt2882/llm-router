@@ -14,7 +14,7 @@ function dropAdapter() {
   delete global._dbAdapter;
 }
 
-async function loadRoute() {
+async function loadRoute({ fxFails = false } = {}) {
   vi.resetModules();
   vi.stubEnv("WAVEBOT_FORK_ADMIN_TOKEN", "secret-token");
   vi.doMock("next/server", () => ({
@@ -23,7 +23,7 @@ async function loadRoute() {
         new Response(JSON.stringify(body), { status: init.status || 200, headers: { "Content-Type": "application/json" } }),
     },
   }));
-  vi.doMock("@/lib/fx/fxRate.js", () => ({ getFloorRate: async () => ({ rate: 25500, stale: false, source: "test", pinned: false }) }));
+  vi.doMock("@/lib/fx/fxRate.js", () => ({ getFloorRate: async () => { if (fxFails) throw new Error("no fx"); return { rate: 25000, stale: false, source: "test", pinned: false }; } }));
   const repo = await import("@/lib/db/repos/salePriceRepo.js");
   await repo.setSalePrice(SALE);
   await repo.setSalePrice({ ...SALE, name: "cc/pic", perImage: 3 });
@@ -60,7 +60,7 @@ describe("POST /api/fork/quote", () => {
     // 100000*1000 + 10000*4000 + 2000*5000 = 150,000,000 / 1e6 = 150
     expect(body.creditsWorstCase).toBe(150);
     expect(body.sale).toMatchObject({ input: 1000, output: 4000, cached: 100, reasoning: 5000, cacheCreation: 1250 });
-    expect(body.floorRate).toBe(25500);
+    expect(body.floorRate).toBe(25000);
   });
 
   it("rounds a fractional worst case up", async () => {
@@ -103,6 +103,43 @@ describe("POST /api/fork/quote", () => {
     }
   });
 
+  it("prices a stored USD row in credits at the floor rate", async () => {
+    const { POST } = await loadRoute();
+    const repo = await import("@/lib/db/repos/salePriceRepo.js");
+    await repo.setSalePrice({ name: "cc/usd", kind: "model", unit: "usd", input: 1.2, output: 4.8, cached: 0.12, reasoning: 4.8, cacheCreation: 1.5, perImage: 0 });
+    const body = await (await POST(post({ model: "cc/usd", inputTokens: 1000, maxTokens: 1000 }))).json();
+    expect(body.creditsWorstCase).toBe(150);
+    expect(body.sale).toMatchObject({ input: 30000, output: 120000, cached: 3000 });
+    expect(body.sale.unit).toBeUndefined();
+  });
+
+  it("402 not_sellable for a stored USD row when there is no FX rate", async () => {
+    const { POST } = await loadRoute({ fxFails: true });
+    const repo = await import("@/lib/db/repos/salePriceRepo.js");
+    await repo.setSalePrice({ name: "cc/usd", kind: "model", unit: "usd", input: 1.2, output: 4.8, cached: 0.12, reasoning: 4.8, cacheCreation: 1.5, perImage: 0 });
+    const res = await POST(post({ model: "cc/usd", inputTokens: 1000, maxTokens: 1000 }));
+    expect(res.status).toBe(402);
+    expect(await res.json()).toMatchObject({ error: "not_sellable" });
+  });
+
+  it("marks an active USD promotion under the cost floor as belowFloor", async () => {
+    vi.doMock("@/lib/db/repos/pricingRepo.js", () => ({
+      getPricingForModel: async () => ({ input: 3, output: 15, cached: 0.3, reasoning: 15, cache_creation: 3.75 }),
+    }));
+    vi.doMock("@/lib/db/repos/combosRepo.js", () => ({ getComboByName: async () => null }));
+    try {
+      const { POST } = await loadRoute();
+      const repo = await import("@/lib/db/repos/salePriceRepo.js");
+      const endsAt = Date.now() + 3_600_000;
+      await repo.setSalePrice({ name: "cc/promo", kind: "model", unit: "usd", input: 2.9, output: 15, cached: 0.3, reasoning: 15, cacheCreation: 3.75, perImage: 0, source: "promo", endsAt, restore: null });
+      const body = await (await POST(post({ model: "cc/promo", inputTokens: 1, maxTokens: 1 }))).json();
+      expect(body.sale).toMatchObject({ endsAt, belowFloor: true });
+    } finally {
+      vi.doUnmock("@/lib/db/repos/pricingRepo.js");
+      vi.doUnmock("@/lib/db/repos/combosRepo.js");
+    }
+  });
+
   it("401 without the admin bearer", async () => {
     const { POST } = await loadRoute();
     expect((await POST(post({ model: "cc/cheap", inputTokens: 1, maxTokens: 1 }, { token: null }))).status).toBe(401);
@@ -121,9 +158,9 @@ describe("POST /api/fork/quote", () => {
     const res = await POST(post({ model: "cc/claude-sonnet-4-6", inputTokens: 1_000_000, maxTokens: 0 }));
     expect(res.status).toBe(200);
     const body = await res.json();
-    // base input $3 per 1M x rate 25500
-    expect(body.creditsWorstCase).toBe(76_500);
-    expect(body.sale).toMatchObject({ input: 76_500, output: 382_500, auto: true });
+    // base input $3 per 1M x rate 25000
+    expect(body.creditsWorstCase).toBe(75_000);
+    expect(body.sale).toMatchObject({ input: 75_000, output: 375_000, auto: true });
   });
 
   it("400 on malformed numbers or JSON", async () => {

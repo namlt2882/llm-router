@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { assertForkAdmin } from "@/lib/forkAdminAuth";
 import { getSalePrice, listSalePrices, removeSalePrice, setSalePrice } from "@/lib/db/repos/salePriceRepo.js";
 import { defaultContext, listFlagged, validateSalePrice } from "@/lib/pricing/validateSalePrice.js";
+import { migrateLegacyPrices } from "@/lib/pricing/migrateLegacyPrices.js";
 
 const NO_STORE = { "Cache-Control": "no-store" };
 const unauthorized = () => NextResponse.json({ error: "Unauthorized" }, { status: 401, headers: NO_STORE });
@@ -18,8 +19,9 @@ const noRate = () => NextResponse.json({ error: "fx_rate_unavailable" }, { statu
 export async function GET(request) {
   if (!(await assertForkAdmin(request))) return unauthorized();
   const name = new URL(request.url).searchParams.get("name");
-  if (name) return NextResponse.json({ price: await getSalePrice(name) }, { headers: NO_STORE });
   const ctx = await context();
+  if (ctx) await migrateLegacyPrices({ rate: ctx.rate });
+  if (name) return NextResponse.json({ price: await getSalePrice(name) }, { headers: NO_STORE });
   if (!ctx) return noRate();
   return NextResponse.json({ prices: await listSalePrices(), flagged: await listFlagged(ctx), rate: ctx.rate }, { headers: NO_STORE });
 }
@@ -32,6 +34,7 @@ export async function PUT(request) {
   } catch {
     return NextResponse.json({ error: "Invalid JSON body" }, { status: 400, headers: NO_STORE });
   }
+  if (body?.unit !== "usd") return NextResponse.json({ error: "unit_required" }, { status: 400, headers: NO_STORE });
   const ctx = await context();
   if (!ctx) return noRate();
   const v = await validateSalePrice(body, ctx);

@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { assertForkAdmin } from "@/lib/forkAdminAuth";
-import { effectiveSalePrice } from "@/lib/pricing/effectiveSalePrice.js";
+import { effectiveSalePrice, effectiveUsdPrice } from "@/lib/pricing/effectiveSalePrice.js";
 import { defaultContext } from "@/lib/pricing/validateSalePrice.js";
 import { belowFloor } from "@/lib/pricing/bulkPrice.js";
 import { getFloorRate } from "@/lib/fx/fxRate.js";
@@ -39,7 +39,7 @@ export async function POST(request) {
     return fail(503, "fx_rate_unavailable");
   }
   const promo = sale.source === "promo";
-  const promoUnderFloor = promo ? await belowFloor(sale, await defaultContext()).catch(() => false) : false;
+  const promoUnderFloor = promo ? await belowFloor(await effectiveUsdPrice(body.model), await defaultContext()).catch(() => false) : false;
   const perMillion = inputTokens * sale.input + maxTokens * sale.output + reasoning * sale.reasoning;
   const creditsWorstCase = Math.ceil(perMillion / 1e6 - 1e-9) + images * (sale.perImage || 0);
   return NextResponse.json(
