@@ -1,5 +1,7 @@
-import { priceForPrompt } from "../utils/priceTiers.js";
-export { priceForPrompt };
+import { priceForPrompt, priceAt, settleBand } from "../utils/priceTiers.js";
+export { priceForPrompt, priceAt };
+
+const DEEPSEEK_OFFPEAK = { schedule: "deepseek", factor: 0.5 };
 
 // Pricing rates for AI models — all rates in $/1M tokens
 //
@@ -160,10 +162,10 @@ export const MODEL_PRICING = {
   "deepseek-r1":                  { input: 0.14,  output: 0.28,  cached: 0.0028, reasoning: 0.28,   cache_creation: 0.14  },
   "deepseek-v3.2-chat":           { input: 0.14,  output: 0.28,  cached: 0.0028, reasoning: 0.28,   cache_creation: 0.14  },
   "deepseek-v3.2-reasoner":       { input: 0.14,  output: 0.28,  cached: 0.0028, reasoning: 0.28,   cache_creation: 0.14  },
-  "deepseek-v4-flash": { input: 0.3, output: 1.2, cached: 0.006, reasoning: 1.2, cache_creation: 0.3 },
-  "deepseek-v4.1-flash": { input: 0.3, output: 1.2, cached: 0.006, reasoning: 1.2, cache_creation: 0.3 },
-  "deepseek-flash": { input: 0.3, output: 1.2, cached: 0.006, reasoning: 1.2, cache_creation: 0.3 },
-  "deepseek-v4-pro": { input: 1.32, output: 3.96, cached: 0.044, reasoning: 3.96, cache_creation: 1.32 },
+  "deepseek-v4-flash": { input: 0.3, output: 1.2, cached: 0.006, reasoning: 1.2, cache_creation: 0.3, offPeak: DEEPSEEK_OFFPEAK },
+  "deepseek-v4.1-flash": { input: 0.3, output: 1.2, cached: 0.006, reasoning: 1.2, cache_creation: 0.3, offPeak: DEEPSEEK_OFFPEAK },
+  "deepseek-flash": { input: 0.3, output: 1.2, cached: 0.006, reasoning: 1.2, cache_creation: 0.3, offPeak: DEEPSEEK_OFFPEAK },
+  "deepseek-v4-pro": { input: 1.32, output: 3.96, cached: 0.044, reasoning: 3.96, cache_creation: 1.32, offPeak: DEEPSEEK_OFFPEAK },
 
   // === GLM ===
   "glm-4.6": { input: 0.6, output: 2.2, cached: 0.11, reasoning: 2.2, cache_creation: 0.6 },
@@ -420,8 +422,8 @@ export const PATTERN_PRICING = [
   // --- DeepSeek --- (peak rate, so a sale is never under cost)
   { pattern: "deepseek-*reasoner*", pricing: { input: 0.30, output: 1.20, cached: 0.006, reasoning: 1.20, cache_creation: 0.30 } },
   { pattern: "deepseek-r*",     pricing: { input: 0.30,  output: 1.20,  cached: 0.006,  reasoning: 1.20,   cache_creation: 0.30  } },
-  { pattern: "deepseek-v*",     pricing: { input: 0.30,  output: 1.20,  cached: 0.006,  reasoning: 1.20,   cache_creation: 0.30  } },
-  { pattern: "deepseek-*",      pricing: { input: 0.30,  output: 1.20,  cached: 0.006,  reasoning: 1.20,   cache_creation: 0.30  } },
+  { pattern: "deepseek-v*",     pricing: { input: 0.30,  output: 1.20,  cached: 0.006,  reasoning: 1.20,   cache_creation: 0.30 , offPeak: DEEPSEEK_OFFPEAK } },
+  { pattern: "deepseek-*",      pricing: { input: 0.30,  output: 1.20,  cached: 0.006,  reasoning: 1.20,   cache_creation: 0.30 , offPeak: DEEPSEEK_OFFPEAK } },
 
   // --- GLM ---
   { pattern: "glm-5*",          pricing: { input: 1.00,  output: 4.00,  cached: 0.50,  reasoning: 6.00,   cache_creation: 1.00  } },
@@ -505,15 +507,16 @@ export function formatCost(cost) {
  * Calculate cost from tokens and pricing
  * @param {object} tokens
  * @param {object} pricing
+ * @param {number} [at] request start (ms); omitted prices at peak
  * @returns {number} cost in dollars
  */
-export function calculateCostFromTokens(tokens, pricing) {
+export function calculateCostFromTokens(tokens, pricing, at) {
   if (!tokens || !pricing) return 0;
 
   let cost = 0;
 
   const inputTokens = tokens.prompt_tokens || tokens.input_tokens || 0;
-  pricing = priceForPrompt(pricing, inputTokens);
+  pricing = priceForPrompt(settleBand(pricing, at), inputTokens);
   const cachedTokens = tokens.cached_tokens || tokens.cache_read_input_tokens || 0;
   const cacheCreationTokens = tokens.cache_creation_input_tokens || 0;
   // prompt_tokens is cache-inclusive (see canonicalizeUsage): cached + cache_creation

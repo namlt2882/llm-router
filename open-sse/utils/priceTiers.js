@@ -1,3 +1,5 @@
+import { bandFor } from "./priceSchedule.js";
+
 /**
  * The flat rate that applies to a request of `promptTokens`. A price row may carry
  * `tiers: [{ above, ...fields }]`: when the prompt is strictly over a tier's `above`, the highest such tier
@@ -35,4 +37,31 @@ export function priceForReserve(row, estimatedTokens, margin = 1.25) {
   const out = { ...at };
   for (const [k, v] of Object.entries(hi)) if (typeof v === "number" && !(out[k] >= v)) out[k] = v;
   return out;
+}
+
+const TOKEN_KEYS = ["input", "cached", "output", "reasoning", "cache_creation", "cacheCreation"];
+const scaled = (o, f) => {
+  const out = { ...o };
+  for (const k of TOKEN_KEYS) if (typeof out[k] === "number") out[k] *= f;
+  return out;
+};
+
+/**
+ * Resolve a row's `offPeak: { schedule, factor }` at time `at` (ms). Off-peak multiplies every token field, and every
+ * tier's, by `factor`. No `at`, an unknown schedule or a factor outside (0, 1] means peak (the worst case). The
+ * `offPeak` key is stripped; a row without it is returned as is.
+ */
+export function settleBand(row, at) {
+  if (!row || !row.offPeak) return row;
+  const { offPeak, ...rest } = row;
+  const f = offPeak.factor;
+  if (!(Number.isFinite(f) && f > 0 && f <= 1) || bandFor(offPeak.schedule, at) !== "offpeak") return rest;
+  const out = scaled(rest, f);
+  if (Array.isArray(rest.tiers)) out.tiers = rest.tiers.map((t) => scaled(t, f));
+  return out;
+}
+
+/** The rate for a request of `promptTokens` that started at `at`: size tier first, then the time-of-day band. */
+export function priceAt(row, { promptTokens, at } = {}) {
+  return priceForPrompt(settleBand(row, at), promptTokens);
 }
