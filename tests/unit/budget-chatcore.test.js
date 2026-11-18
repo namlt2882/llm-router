@@ -162,6 +162,7 @@ describe("chatCore under a WaveBot budget (fork patch #26)", { timeout: 20_000 }
     expect(p.reserved || 0).toBe(0);
     const row = saveUsageMock.mock.calls.map((c) => c[0]).find((r) => r.holdId);
     expect(row).toMatchObject({ holdId: "hold-1", costCredits: "140" });
+    expect(row.startedAt).toEqual(expect.any(Number));
   });
 
   it("a call that omits stream and sends no Accept header is non-stream (OpenAI default) and still reports its cost", async () => {

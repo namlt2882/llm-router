@@ -101,7 +101,7 @@ export async function handleStreamingResponse({ providerResponse, provider, mode
   // Fork patch #26: cut at the spend ceiling and stamp the final chunk with the cost.
   if (budget) {
     budget.abort = () => streamController.abort?.();
-    budget.onCut = ({ attemptCost, usage }) => saveUsageStats({ provider, model, tokens: usage, connectionId, apiKey, endpoint: clientRawRequest?.endpoint, label: "STREAM USAGE", silent: true, budget, costOverride: attemptCost });
+    budget.onCut = ({ attemptCost, usage }) => saveUsageStats({ provider, model, tokens: usage, connectionId, apiKey, startedAt: requestStartTime, endpoint: clientRawRequest?.endpoint, label: "STREAM USAGE", silent: true, budget, costOverride: attemptCost });
     budget.onDone = () => budget.release();
     transformedBody = transformedBody.pipeThrough(createBudgetStream(budget));
   }
@@ -155,7 +155,7 @@ export function buildOnStreamComplete({ provider, model, connectionId, apiKey, r
     });
 
     // Persist stream usage to DB (no console line; the "📊 done" line below is authoritative)
-    saveUsageStats({ provider, model, tokens: usage, connectionId, apiKey, endpoint: clientRawRequest?.endpoint, label: "STREAM USAGE", silent: true, budget });
+    saveUsageStats({ provider, model, tokens: usage, connectionId, apiKey, startedAt: requestStartTime, endpoint: clientRawRequest?.endpoint, label: "STREAM USAGE", silent: true, budget });
     if (log?.line) log.line(reqTag, "📊", formatDoneLine({ usage, latency }));
   };
 

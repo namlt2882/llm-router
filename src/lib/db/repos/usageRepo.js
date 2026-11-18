@@ -133,7 +133,7 @@ async function ensureRingInitialized() {
   } catch {}
 }
 
-async function calculateCost(provider, model, tokens) {
+async function calculateCost(provider, model, tokens, at) {
   if (!tokens || !provider || !model) return 0;
   try {
     const { getPricingForModel } = await import("./pricingRepo.js");
@@ -144,7 +144,7 @@ async function calculateCost(provider, model, tokens) {
     // copies drifting apart — see open-sse/providers/pricing.js for the
     // cache-inclusive prompt_tokens convention this assumes).
     const { calculateCostFromTokens } = await import("open-sse/providers/pricing.js");
-    return calculateCostFromTokens(tokens, pricing);
+    return calculateCostFromTokens(tokens, pricing, at);
   } catch (e) {
     console.error("Error calculating cost:", e);
     return 0;
@@ -245,7 +245,9 @@ export async function saveRequestUsage(entry) {
     const db = await getAdapter();
 
     if (!entry.timestamp) entry.timestamp = new Date().toISOString();
-    entry.cost = await calculateCost(entry.provider, entry.model, entry.tokens);
+    // Off-peak pricing follows when the request STARTED; a missing or unparsable time prices at peak.
+    const at = Number.isFinite(entry.startedAt) ? entry.startedAt : Date.parse(entry.timestamp);
+    entry.cost = await calculateCost(entry.provider, entry.model, entry.tokens, at);
 
     const tokens = entry.tokens || {};
     const promptTokens = tokens.prompt_tokens || tokens.input_tokens || 0;
