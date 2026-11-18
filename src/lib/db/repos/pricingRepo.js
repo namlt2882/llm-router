@@ -51,9 +51,13 @@ export async function getPricing() {
 export async function getPricingForModel(provider, model) {
   if (!model) return null;
   const userPricing = await getUserPricing();
-  if (provider && userPricing[provider]?.[model]) return userPricing[provider][model];
   const { getPricingForModel: resolveConst } = await import("open-sse/providers/pricing.js");
-  return resolveConst(provider, model);
+  const user = provider ? userPricing[provider]?.[model] : null;
+  if (!user) return resolveConst(provider, model);
+  if (user.offPeak) return user;
+  // The settings editor saves plain rates; the vendor's off-peak schedule is not an editable field, so keep it.
+  const offPeak = resolveConst(provider, model)?.offPeak;
+  return offPeak ? { ...user, offPeak } : user;
 }
 
 // Atomic merge inside transaction (per-provider read-modify-write)
