@@ -63,7 +63,7 @@ describe("context tiers in the pricing page", () => {
   });
 });
 
-import { scheduleLabel, calendarStaleNotice } from "@/app/(dashboard)/dashboard/pricing/formatPrice.js";
+import { scheduleLabel, calendarStaleNotice, priceCell, bandPrices } from "@/app/(dashboard)/dashboard/pricing/formatPrice.js";
 
 describe("peak / off-peak caption", () => {
   it("names the band now and when it changes", () => {
@@ -79,5 +79,23 @@ describe("peak / off-peak caption", () => {
   it("warns once about the holiday calendar only when a row is stale", () => {
     expect(calendarStaleNotice([{}, { schedule: { calendarStale: true } }])).toBe("Chinese holiday calendar is ending: add the next year's dates in open-sse/utils/priceSchedule.js");
     expect(calendarStaleNotice([{}])).toBeNull();
+  });
+});
+
+describe("price cells and bands", () => {
+  const p = (input, cached, output, tiers) => ({ input, cached, output, ...(tiers ? { tiers } : {}) });
+  it("priceCell joins in / cached / out in the chosen unit and shows - for no price", () => {
+    expect(priceCell(p(1.32, 0.044, 3.96), "usd")).toBe("1.32 / 0.044 / 3.96");
+    expect(priceCell(p(1, 0.1, 2), "vnd", 25000)).toBe("25,000 / 2,500 / 50,000");
+    expect(priceCell(null, "usd")).toBe("-");
+    expect(priceCell(undefined, "vnd", 25000)).toBe("-");
+  });
+
+  it("a scheduled row splits into peak and off-peak, a flat row has no off-peak", () => {
+    const sched = { effective: p(0.66, 0.022, 1.98), bands: { peak: p(1.32, 0.044, 3.96), offpeak: p(0.66, 0.022, 1.98) } };
+    expect(bandPrices(sched)).toEqual({ standard: sched.bands.peak, offpeak: sched.bands.offpeak });
+    const flat = { effective: p(1, 0.1, 2) };
+    expect(bandPrices(flat)).toEqual({ standard: flat.effective, offpeak: null });
+    expect(bandPrices({ effective: null })).toEqual({ standard: null, offpeak: null });
   });
 });

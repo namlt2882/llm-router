@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Badge, Button, Card, Input, Select } from "@/shared/components";
 import { filterRows } from "./filterRows.js";
-import { calendarStaleNotice, editTiersFrom, fmtTokens, fmtUsd, parseDefaultBase, scheduleLabel, showPrice, tierLines, tiersForSave } from "./formatPrice.js";
+import { bandPrices, calendarStaleNotice, editTiersFrom, fmtTokens, fmtUsd, parseDefaultBase, priceCell, scheduleLabel, showPrice, tierLines, tiersForSave } from "./formatPrice.js";
 import { bulkPreview, selectedVisible } from "./bulkPreview.js";
 
 const FIELDS = [
@@ -340,8 +340,9 @@ export default function PricingClient() {
                 </th>
                 <th className="pb-2 pr-3">Name</th>
                 <th className="pb-2 pr-3">Kind</th>
-                <th className="pb-2 pr-3">Floor in / cached / out</th>
-                <th className="pb-2 pr-3">Price in / cached / out</th>
+                <th className="pb-2 pr-3">Cost floor (peak)<div className="text-xs font-normal">input / cached / output</div></th>
+                <th className="pb-2 pr-3">Sale price, peak / all day<div className="text-xs font-normal">input / cached / output</div></th>
+                <th className="pb-2 pr-3">Sale price, off-peak only<div className="text-xs font-normal">input / cached / output</div></th>
                 <th className="pb-2 pr-3">Status</th>
                 <th />
               </tr>
@@ -363,7 +364,7 @@ export default function PricingClient() {
               ))}
               {visible.length === 0 && (
                 <tr>
-                  <td colSpan={7} className="py-3 text-text-muted">{rows.length === 0 ? "No models or combos are served yet." : "No name matches this search."}</td>
+                  <td colSpan={8} className="py-3 text-text-muted">{rows.length === 0 ? "No models or combos are served yet." : "No name matches this search."}</td>
                 </tr>
               )}
             </tbody>
@@ -393,14 +394,15 @@ function PriceRow({ row, mode, rate, checked, flagged, error, onToggle, onSave, 
   const [edit, setEdit] = useState({});
   const [editTiers, setEditTiers] = useState([]);
   const locked = row.status === "no_base_price";
+  const bands = bandPrices(row);
   const startEdit = () => {
-    setEdit({ ...(row.effective || {}) });
-    setEditTiers(editTiersFrom(row.effective, row.floor));
+    setEdit({ ...(bands.standard || {}) });
+    setEditTiers(editTiersFrom(bands.standard, row.floor));
     setOpen(true);
   };
   const dirty =
-    FIELDS.some(([k]) => String(edit[k] ?? "") !== String(row.effective?.[k] ?? "")) ||
-    JSON.stringify(editTiers) !== JSON.stringify(editTiersFrom(row.effective, row.floor));
+    FIELDS.some(([k]) => String(edit[k] ?? "") !== String(bands.standard?.[k] ?? "")) ||
+    JSON.stringify(editTiers) !== JSON.stringify(editTiersFrom(bands.standard, row.floor));
   return (
     <>
       <tr className={row.belowFloor || flagged ? "bg-red-500/5" : ""}>
@@ -413,12 +415,16 @@ function PriceRow({ row, mode, rate, checked, flagged, error, onToggle, onSave, 
         </td>
         <td className="py-1 pr-3">{row.kind}</td>
         <td className="py-1 pr-3 whitespace-nowrap">
-          {row.floor ? [row.floor.input, row.floor.cached, row.floor.output].map((v) => showPrice(v, mode, rate)).join(" / ") : "-"}
+          {priceCell(row.floor, mode, rate)}
           {tierLines(row.floor, mode, rate).map((l) => <div key={l} className="text-xs text-text-muted">{l}</div>)}
         </td>
-        <td className="py-1 pr-3 whitespace-nowrap">
-          {row.effective ? [row.effective.input, row.effective.cached, row.effective.output].map((v) => showPrice(v, mode, rate)).join(" / ") : "-"}
-          {tierLines(row.effective, mode, rate).map((l) => <div key={l} className="text-xs text-text-muted">{l}</div>)}
+        <td className="py-1 pr-3 whitespace-nowrap" data-testid="price-standard">
+          {priceCell(bands.standard, mode, rate)}
+          {tierLines(bands.standard, mode, rate).map((l) => <div key={l} className="text-xs text-text-muted">{l}</div>)}
+        </td>
+        <td className="py-1 pr-3 whitespace-nowrap" data-testid="price-offpeak">
+          {priceCell(bands.offpeak, mode, rate)}
+          {tierLines(bands.offpeak, mode, rate).map((l) => <div key={l} className="text-xs text-text-muted">{l}</div>)}
         </td>
         <td className="py-1 pr-3"><StatusBadges row={row} flagged={flagged} /></td>
         <td className="py-1 text-right whitespace-nowrap">
@@ -429,7 +435,7 @@ function PriceRow({ row, mode, rate, checked, flagged, error, onToggle, onSave, 
       {open && (
         <tr>
           <td />
-          <td colSpan={6} className="pb-3">
+          <td colSpan={7} className="pb-3">
             <div className="flex flex-wrap items-end gap-3">
               {FIELDS.map(([k, label]) => (
                 <label key={k} className="flex flex-col text-xs text-text-muted">
@@ -469,7 +475,7 @@ function PriceRow({ row, mode, rate, checked, flagged, error, onToggle, onSave, 
       {error && (
         <tr>
           <td />
-          <td colSpan={6} className="pb-2 text-xs text-red-500">{error}</td>
+          <td colSpan={7} className="pb-2 text-xs text-red-500">{error}</td>
         </tr>
       )}
     </>

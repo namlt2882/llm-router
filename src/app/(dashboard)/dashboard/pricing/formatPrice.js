@@ -24,6 +24,16 @@ export function fmtTokens(n) {
   return String(n);
 }
 
+/** "in / cached / out" of a price row in the chosen unit; "-" when there is no price. */
+export const priceCell = (row, mode, rate) =>
+  row ? [row.input, row.cached, row.output].map((v) => showPrice(v, mode, rate)).join(" / ") : "-";
+
+/** The two sale-price columns of a row: the standard (peak) price and the off-peak one, null where there is none. */
+export function bandPrices(row) {
+  if (row?.bands) return { standard: row.bands.peak ?? null, offpeak: row.bands.offpeak ?? null };
+  return { standard: row?.effective ?? null, offpeak: null };
+}
+
 /** One "> 200K: input / cached / output" line per context tier of a price row, in the chosen unit. */
 export const tierLines = (row, mode, rate) =>
   (row?.tiers ?? []).map((t) => `> ${fmtTokens(t.above)}: ${[t.input, t.cached, t.output].map((v) => showPrice(v, mode, rate)).join(" / ")}`);

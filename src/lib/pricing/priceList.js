@@ -32,7 +32,15 @@ export async function listPrices({ names, stored = listSalePrices, ctx = default
     };
     if (live?.source === "promo") row.endsAt = live.endsAt;
     const sid = await scheduleOf(name, c);
-    if (sid) row.schedule = { id: sid, band: bandFor(sid, now), nextChangeAt: nextBoundary(sid, now), calendarStale: calendarStale(sid, now) };
+    if (sid) {
+      const band = bandFor(sid, now);
+      const nextChangeAt = nextBoundary(sid, now);
+      row.schedule = { id: sid, band, nextChangeAt, calendarStale: calendarStale(sid, now) };
+      // Both bands side by side; `null` as `at` means peak, off-peak needs a real instant inside an off-peak window.
+      const offAt = band === "offpeak" ? now : nextChangeAt;
+      const at = (t) => effectiveUsdPrice(name, { stored: async () => raw, ctx: c, now, at: t });
+      row.bands = { peak: await at(null), offpeak: offAt == null ? null : await at(offAt) };
+    }
     out.push(row);
   }
   return out;

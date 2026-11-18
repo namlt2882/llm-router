@@ -47,3 +47,30 @@ describe("price list schedule", () => {
     expect(await scheduleOf("loop", ctx())).toBeNull();
   });
 });
+
+describe("price list bands", () => {
+  it("a scheduled name carries its sale price in both bands, whichever band it is now", async () => {
+    for (const now of [PEAK, OFF]) {
+      const r = (await rows(now))["ds/pro"];
+      expect(r.bands.peak.input).toBe(10);
+      expect(r.bands.offpeak.input).toBe(5);
+    }
+  });
+
+  it("a combo averages its members in each band", async () => {
+    const r = (await rows(PEAK)).mix;
+    expect(r.bands.peak.input).toBe(5.5);
+    expect(r.bands.offpeak.input).toBe(3);
+  });
+
+  it("a name with no schedule has no bands", async () => {
+    expect("bands" in (await rows(PEAK))["cc/cheap"]).toBe(false);
+  });
+
+  it("a hand-set price is the same in both bands", async () => {
+    const hand = async () => [{ name: "ds/pro", kind: "model", unit: "usd", input: 20, output: 40, cached: 2, reasoning: 40, cacheCreation: 20 }];
+    const [r] = await listPrices({ names: ["ds/pro"], stored: hand, ctx: ctx(), now: PEAK });
+    expect(r.bands.peak.input).toBe(20);
+    expect(r.bands.offpeak.input).toBe(20);
+  });
+});
