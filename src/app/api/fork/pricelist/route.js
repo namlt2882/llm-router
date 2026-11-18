@@ -1,0 +1,38 @@
+import { NextResponse } from "next/server";
+import { assertForkAdmin } from "@/lib/forkAdminAuth";
+import { buildModelsList } from "@/app/api/v1/models/route.js";
+import { listSalePrices, setSalePrice, removeSalePrice } from "@/lib/db/repos/salePriceRepo.js";
+import { defaultContext } from "@/lib/pricing/validateSalePrice.js";
+import { listPrices } from "@/lib/pricing/priceList.js";
+
+const NO_STORE = { "Cache-Control": "no-store" };
+const NAMES_TTL_MS = 60_000;
+const fail = (status, error) => NextResponse.json({ error }, { status, headers: NO_STORE });
+
+let namesCache = { at: 0, names: [] };
+async function servedNames(now) {
+  if (now - namesCache.at < NAMES_TTL_MS) return namesCache.names;
+  const names = (await buildModelsList(["llm"])).map((m) => m.id);
+  namesCache = { at: now, names };
+  return names;
+}
+
+// Fork patch #30: every served model and combo with its floor, stored price, effective price and status.
+export async function GET(request) {
+  if (!(await assertForkAdmin(request))) return fail(401, "Unauthorized");
+  let ctx;
+  try {
+    ctx = await defaultContext();
+  } catch {
+    return fail(503, "fx_rate_unavailable");
+  }
+  const now = Date.now();
+  for (const row of await listSalePrices()) {
+    if (row.source === "promo" && row.endsAt <= now) {
+      if (row.restore) await setSalePrice(row.restore);
+      else await removeSalePrice(row.name);
+    }
+  }
+  const rows = await listPrices({ names: await servedNames(now), ctx, now });
+  return NextResponse.json({ rows, rate: ctx.rate }, { headers: NO_STORE });
+}

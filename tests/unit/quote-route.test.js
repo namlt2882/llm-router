@@ -75,6 +75,34 @@ describe("POST /api/fork/quote", () => {
     expect(body.creditsWorstCase).toBe(12);
   });
 
+  it("flags a promotion price with endsAt and belowFloor", async () => {
+    const { POST } = await loadRoute();
+    const repo = await import("@/lib/db/repos/salePriceRepo.js");
+    const endsAt = Date.now() + 3_600_000;
+    await repo.setSalePrice({ ...SALE, name: "cc/promo", input: 1, output: 1, cached: 1, reasoning: 1, cacheCreation: 1, source: "promo", endsAt, restore: null });
+    const body = await (await POST(post({ model: "cc/promo", inputTokens: 1, maxTokens: 1 }))).json();
+    expect(body.sale).toMatchObject({ endsAt });
+    expect(body.sale.belowFloor).toBeUndefined();
+  });
+
+  it("marks a promotion under the cost floor as belowFloor", async () => {
+    vi.doMock("@/lib/db/repos/pricingRepo.js", () => ({
+      getPricingForModel: async () => ({ input: 3, output: 15, cached: 0.3, reasoning: 15, cache_creation: 3.75 }),
+    }));
+    vi.doMock("@/lib/db/repos/combosRepo.js", () => ({ getComboByName: async () => null }));
+    try {
+      const { POST } = await loadRoute();
+      const repo = await import("@/lib/db/repos/salePriceRepo.js");
+      const endsAt = Date.now() + 3_600_000;
+      await repo.setSalePrice({ ...SALE, name: "cc/promo", input: 1, output: 1, cached: 1, reasoning: 1, cacheCreation: 1, source: "promo", endsAt, restore: null });
+      const body = await (await POST(post({ model: "cc/promo", inputTokens: 1, maxTokens: 1 }))).json();
+      expect(body.sale).toMatchObject({ endsAt, belowFloor: true });
+    } finally {
+      vi.doUnmock("@/lib/db/repos/pricingRepo.js");
+      vi.doUnmock("@/lib/db/repos/combosRepo.js");
+    }
+  });
+
   it("401 without the admin bearer", async () => {
     const { POST } = await loadRoute();
     expect((await POST(post({ model: "cc/cheap", inputTokens: 1, maxTokens: 1 }, { token: null }))).status).toBe(401);

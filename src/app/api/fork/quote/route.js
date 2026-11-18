@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import { assertForkAdmin } from "@/lib/forkAdminAuth";
 import { effectiveSalePrice } from "@/lib/pricing/effectiveSalePrice.js";
+import { defaultContext } from "@/lib/pricing/validateSalePrice.js";
+import { belowFloor } from "@/lib/pricing/bulkPrice.js";
 import { getFloorRate } from "@/lib/fx/fxRate.js";
 
 const NO_STORE = { "Cache-Control": "no-store" };
@@ -36,12 +38,14 @@ export async function POST(request) {
   } catch {
     return fail(503, "fx_rate_unavailable");
   }
+  const promo = sale.source === "promo";
+  const promoUnderFloor = promo ? await belowFloor(sale, await defaultContext()).catch(() => false) : false;
   const perMillion = inputTokens * sale.input + maxTokens * sale.output + reasoning * sale.reasoning;
   const creditsWorstCase = Math.ceil(perMillion / 1e6 - 1e-9) + images * (sale.perImage || 0);
   return NextResponse.json(
     {
       creditsWorstCase,
-      sale: { input: sale.input, output: sale.output, cached: sale.cached, reasoning: sale.reasoning, cacheCreation: sale.cacheCreation, perImage: sale.perImage || 0, ...(sale.auto ? { auto: true } : {}) },
+      sale: { input: sale.input, output: sale.output, cached: sale.cached, reasoning: sale.reasoning, cacheCreation: sale.cacheCreation, perImage: sale.perImage || 0, ...(sale.auto ? { auto: true } : {}), ...(promo ? { endsAt: sale.endsAt, ...(promoUnderFloor ? { belowFloor: true } : {}) } : {}) },
       floorRate: rate,
     },
     { headers: NO_STORE },
