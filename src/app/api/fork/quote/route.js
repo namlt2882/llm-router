@@ -49,8 +49,8 @@ export async function POST(request) {
   const promo = sale.source === "promo";
   const promoUnderFloor = promo ? await belowFloor(await effectiveUsdPrice(body.model, { at: null }), await defaultContext()).catch(() => false) : false;
   // A long prompt bills every token at its tier, so the worst case is priced at the dearer tier the input size or 1.25x it lands in (the caller only estimates).
-  const at = priceForReserve(sale, inputTokens);
-  const perMillion = inputTokens * at.input + maxTokens * at.output + reasoning * at.reasoning;
+  const reserve = priceForReserve(sale, inputTokens);
+  const perMillion = inputTokens * reserve.input + maxTokens * reserve.output + reasoning * reserve.reasoning;
   const floats = sale.auto === true || (await storedIsUsd(body.model));
   const fxHeadroom = floats ? FX_HEADROOM : 1;
   const creditsWorstCase = Math.ceil((perMillion / 1e6) * fxHeadroom - 1e-9) + Math.ceil(images * (sale.perImage || 0) * fxHeadroom - 1e-9);

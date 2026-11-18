@@ -1,4 +1,4 @@
-import { priceForPrompt, priceAt, settleBand } from "../utils/priceTiers.js";
+import { priceForPrompt, priceAt } from "../utils/priceTiers.js";
 export { priceForPrompt, priceAt };
 
 const DEEPSEEK_OFFPEAK = { schedule: "deepseek", factor: 0.5 };
@@ -516,7 +516,7 @@ export function calculateCostFromTokens(tokens, pricing, at) {
   let cost = 0;
 
   const inputTokens = tokens.prompt_tokens || tokens.input_tokens || 0;
-  pricing = priceForPrompt(settleBand(pricing, at), inputTokens);
+  pricing = priceAt(pricing, { promptTokens: inputTokens, at });
   const cachedTokens = tokens.cached_tokens || tokens.cache_read_input_tokens || 0;
   const cacheCreationTokens = tokens.cache_creation_input_tokens || 0;
   // prompt_tokens is cache-inclusive (see canonicalizeUsage): cached + cache_creation

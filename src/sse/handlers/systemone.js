@@ -23,6 +23,7 @@ import { saveRequestUsage } from "@/lib/usageDb.js";
  * @param {Request} request
  */
 export async function handleSystemone(request) {
+  const startedAt = Date.now();
   let body;
   try {
     body = await request.json();
@@ -145,6 +146,7 @@ export async function handleSystemone(request) {
             total_tokens: result.usage.prompt_tokens + result.usage.completion_tokens,
           },
           status: "success",
+          startedAt,
         }).catch(() => {});
       }
       return result.response;
