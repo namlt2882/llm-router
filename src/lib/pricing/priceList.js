@@ -3,6 +3,8 @@ import { costFloor, defaultContext } from "@/lib/pricing/validateSalePrice.js";
 import { effectiveUsdPrice, resolveStored } from "@/lib/pricing/effectiveSalePrice.js";
 import { belowFloor } from "@/lib/pricing/bulkPrice.js";
 import { toUsdRow } from "@/lib/pricing/priceUnit.js";
+import { scheduleOf } from "@/lib/pricing/scheduleOf.js";
+import { bandFor, nextBoundary, calendarStale } from "../../../open-sse/utils/priceSchedule.js";
 
 const statusOf = (live) => (live ? (live.source === "promo" ? "promo" : live.source === "markup" ? "markup" : "custom") : "auto");
 
@@ -29,6 +31,8 @@ export async function listPrices({ names, stored = listSalePrices, ctx = default
       belowFloor: live ? await belowFloor(live, c) : false,
     };
     if (live?.source === "promo") row.endsAt = live.endsAt;
+    const sid = await scheduleOf(name, c);
+    if (sid) row.schedule = { id: sid, band: bandFor(sid, now), nextChangeAt: nextBoundary(sid, now), calendarStale: calendarStale(sid, now) };
     out.push(row);
   }
   return out;
