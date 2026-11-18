@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Badge, Button, Card, Input, Select } from "@/shared/components";
 import { filterRows } from "./filterRows.js";
-import { fmtUsd, showPrice } from "./formatPrice.js";
+import { fmtUsd, parseDefaultBase, showPrice } from "./formatPrice.js";
 import { ceil6, round6 } from "@/lib/pricing/priceUnit.js";
 
 const FIELDS = [
@@ -167,7 +167,8 @@ export default function PricingClient() {
   }
 
   async function saveDefault() {
-    const body = { enabled: !!baseDefault.enabled, input: Number(baseDefault.input), cached: Number(baseDefault.cached), output: Number(baseDefault.output) };
+    const { body, error } = parseDefaultBase(baseDefault);
+    if (error) return setDefaultMsg(error);
     const r = await call("/api/fork/pricedefault", { method: "PUT", body: JSON.stringify(body) });
     if (!r.ok) return setDefaultMsg(r.data?.error || `Request failed (${r.status})`);
     setDefaultMsg("Saved");

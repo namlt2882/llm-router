@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { fmtUsd, fmtVnd, showPrice } from "@/app/(dashboard)/dashboard/pricing/formatPrice.js";
+import { fmtUsd, fmtVnd, parseDefaultBase, showPrice } from "@/app/(dashboard)/dashboard/pricing/formatPrice.js";
 
 describe("pricing format", () => {
   it("fmtUsd keeps up to 6 decimals, trims trailing zeros and groups thousands", () => {
@@ -20,5 +20,14 @@ describe("pricing format", () => {
   it("showPrice follows the mode", () => {
     expect(showPrice(1, "vnd", 25000)).toBe("25,000");
     expect(showPrice(1, "usd", 25000)).toBe("1");
+  });
+
+  it("parseDefaultBase refuses a blank or non-numeric field instead of saving it as 0", () => {
+    const ok = parseDefaultBase({ enabled: true, input: "0.07", cached: 0.005, output: "0.1" });
+    expect(ok).toEqual({ body: { enabled: true, input: 0.07, cached: 0.005, output: 0.1 } });
+    for (const bad of ["", "  ", "abc", undefined, null]) {
+      expect(parseDefaultBase({ enabled: true, input: 0.05, cached: bad, output: 0.1 }).error, String(bad)).toMatch(/cached/);
+    }
+    expect(parseDefaultBase({ enabled: false, input: "0", cached: "0", output: "0" }).body).toEqual({ enabled: false, input: 0, cached: 0, output: 0 });
   });
 });

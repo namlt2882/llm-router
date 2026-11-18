@@ -12,6 +12,7 @@ const BASES = {
   "cc/dear": base(10),
   "cc/third": { input: 1 / 3, output: 1, cached: 0.1, reasoning: 1, cache_creation: 0.5 },
   "cl/free-model": { input: 0, output: 0, cached: 0, reasoning: 0, cache_creation: 0 },
+  "cc/sparse": { input: 2, output: 8 },
 };
 const COMBOS = {
   mixed: ["cc/cheap", "cc/dear"],
@@ -20,6 +21,7 @@ const COMBOS = {
   loop: ["loop2"],
   loop2: ["loop"],
   holey: ["cc/cheap", "cc/unknown"],
+  sparsemix: ["cc/dear", "cc/sparse"],
 };
 const DEFAULTED = { input: 0.05, output: 0.1, cached: 0.005, reasoning: 0.1, cache_creation: 0.05, defaulted: true };
 const ctxAt = (rate, { withDefault = false } = {}) => ({
@@ -59,6 +61,19 @@ describe("validateSalePrice (USD)", () => {
     expect(await validateSalePrice(atDear, ctxAt(25000))).toEqual({ ok: true });
     const atCheap = { name: "mixed", kind: "combo", ...usd(1, BASES["cc/cheap"]) };
     expect(await validateSalePrice(atCheap, ctxAt(25000))).toEqual({ ok: false, field: "input", minimum: 5.5 });
+  });
+
+  it("a base that omits cached / reasoning / cache write is costed like the cost model does: at input / output / input", async () => {
+    const { costFloor } = await load();
+    const { floor } = await costFloor("cc/sparse", "model", ctxAt(25000));
+    expect(floor).toMatchObject({ input: 2, output: 8, cached: 2, reasoning: 8, cacheCreation: 2 });
+  });
+
+  it("a combo averages the fallback, not zero, for a member that omits a field", async () => {
+    const { costFloor } = await load();
+    const { floor } = await costFloor("sparsemix", "combo", ctxAt(25000));
+    // dear: input 10, cached 1, reasoning 40, cache write 12.5; sparse falls back to 2 / 2 / 8 / 2.
+    expect(floor).toMatchObject({ input: 6, cached: 1.5, reasoning: 24, cacheCreation: 7.25 });
   });
 
   it("a nested combo counts as one member at its own average", async () => {

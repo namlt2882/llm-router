@@ -18,11 +18,19 @@ const unsellable = (name) => ({ ok: false, field: "name", reason: "unsellable", 
 
 // A name's base as USD per 1M tokens: a model's own base, a combo's per-field average of its members
 // (a nested combo is one member at its own average, a duplicated member counts each time).
+// open-sse/providers/pricing.js charges a missing (or zero) cached / cache-write rate at input and reasoning at output.
+const withCostFallbacks = (b) => ({
+  ...b,
+  cached: b.cached || b.input,
+  reasoning: b.reasoning || b.output,
+  cache_creation: b.cache_creation || b.input,
+});
+
 async function unitBase(name, ctx, seen = new Set()) {
   const members = await ctx.comboModels(name);
   if (!members) {
     const b = await ctx.baseFor(name);
-    return b ? { base: b, defaulted: !!b.defaulted } : null;
+    return b ? { base: withCostFallbacks(b), defaulted: !!b.defaulted } : null;
   }
   if (seen.has(name)) return "cycle";
   const next = new Set(seen).add(name);
