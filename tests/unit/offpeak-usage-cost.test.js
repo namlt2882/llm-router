@@ -65,7 +65,10 @@ describe("usage cost follows the request start time", () => {
 });
 
 describe("saveUsageStats forwards startedAt", () => {
-  afterEach(() => vi.doUnmock("@/lib/usageDb.js"));
+  afterEach(() => {
+    vi.doUnmock("@/lib/usageDb.js");
+    vi.doUnmock("../../open-sse/utils/stream.js");
+  });
 
   it("puts startedAt on the usage entry", async () => {
     vi.resetModules();
@@ -76,6 +79,7 @@ describe("saveUsageStats forwards startedAt", () => {
       saveRequestDetail: vi.fn(() => Promise.resolve()),
       trackPendingRequest: vi.fn(),
     }));
+    vi.doMock("../../open-sse/utils/stream.js", () => ({ COLORS: { reset: "", dim: "", red: "", green: "", yellow: "", cyan: "" } }));
     const { saveUsageStats } = await import("../../open-sse/handlers/chatCore/requestDetail.js");
     saveUsageStats({ provider: "deepseek", model: "m", tokens: { prompt_tokens: 10, completion_tokens: 5 }, startedAt: 12345, silent: true });
     expect(saveRequestUsage).toHaveBeenCalledWith(expect.objectContaining({ startedAt: 12345 }));
