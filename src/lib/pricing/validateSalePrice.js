@@ -2,6 +2,8 @@ import { getFloorRate } from "@/lib/fx/fxRate.js";
 import { getPricingForModel } from "@/lib/db/repos/pricingRepo.js";
 import { getComboByName } from "@/lib/db/repos/combosRepo.js";
 import { listSalePrices } from "@/lib/db/repos/salePriceRepo.js";
+import { getPriceDefault } from "@/lib/db/repos/priceDefaultRepo.js";
+import { ceil6, toUsdRow, defaultBase } from "@/lib/pricing/priceUnit.js";
 
 // Sale field -> base field (base prices are USD per 1M tokens, snake_case).
 const FIELDS = [
@@ -14,41 +16,39 @@ const FIELDS = [
 
 const unsellable = (name) => ({ ok: false, field: "name", reason: "unsellable", name });
 
-async function leafBases(name, ctx, seen = new Set()) {
+// A name's base as USD per 1M tokens: a model's own base, a combo's per-field average of its members
+// (a nested combo is one member at its own average, a duplicated member counts each time).
+async function unitBase(name, ctx, seen = new Set()) {
   const members = await ctx.comboModels(name);
   if (!members) {
     const b = await ctx.baseFor(name);
-    return b ? [b] : null;
+    return b ? { base: b, defaulted: !!b.defaulted } : null;
   }
   if (seen.has(name)) return "cycle";
   const next = new Set(seen).add(name);
-  const out = [];
+  const parts = [];
   for (const m of members) {
-    const r = await leafBases(m, ctx, next);
+    const r = await unitBase(m, ctx, next);
     if (r === "cycle") return "cycle";
     if (!r) return null;
-    out.push(...r);
+    parts.push(r);
   }
-  return out;
+  const base = {};
+  for (const [, baseField] of FIELDS) {
+    base[baseField] = parts.reduce((sum, p) => sum + Number(p.base[baseField] ?? 0), 0) / parts.length;
+  }
+  return { base, defaulted: parts.some((p) => p.defaulted) };
 }
 
-/** Cost floor in credits: for each field the dearest leaf base × rate. */
+/** Cost floor in USD per 1M tokens (no FX rate): the base, or a combo's average of its members, rounded up to 6 decimals. */
 export async function costFloor(name, kind, ctx) {
-  let bases;
-  if (kind === "combo") {
-    if (!(await ctx.comboModels(name))) return { error: unsellable(name) };
-    bases = await leafBases(name, ctx);
-    if (bases === "cycle") return { error: { ok: false, field: "name", reason: "combo_cycle", name } };
-  } else {
-    const b = await ctx.baseFor(name);
-    bases = b ? [b] : null;
-  }
-  if (!bases || bases.length === 0) return { error: unsellable(name) };
+  if (kind === "combo" && !(await ctx.comboModels(name))) return { error: unsellable(name) };
+  const r = await unitBase(name, ctx);
+  if (r === "cycle") return { error: { ok: false, field: "name", reason: "combo_cycle", name } };
+  if (!r) return { error: unsellable(name) };
   const floor = {};
-  for (const [field, baseField] of FIELDS) {
-    floor[field] = Math.max(...bases.map((b) => Number(b[baseField] ?? 0))) * ctx.rate;
-  }
-  return { floor };
+  for (const [field, baseField] of FIELDS) floor[field] = ceil6(Number(r.base[baseField] ?? 0));
+  return { floor, defaulted: r.defaulted };
 }
 
 export async function validateSalePrice(entry, ctx) {
@@ -72,28 +72,29 @@ export async function validateSalePrice(entry, ctx) {
   return { ok: true };
 }
 
-/** Rows that fall below the floor after a rate or base change. Never rewritten. */
+/** Rows that fall below the floor after a base change (a legacy credit row is judged at the current rate). Never rewritten. */
 export async function listFlagged(ctx) {
   const out = [];
   for (const row of await listSalePrices()) {
-    const violation = await validateSalePrice(row, ctx);
+    const violation = await validateSalePrice(toUsdRow(row, ctx.rate), ctx);
     if (!violation.ok) out.push({ ...row, violation });
   }
   return out;
 }
 
-async function baseFor(name) {
-  const i = name.indexOf("/");
-  if (i < 0) return null;
-  const p = await getPricingForModel(name.slice(0, i), name.slice(i + 1));
-  return p ?? null;
-}
-
+// The default base is sale-side only: it is never visible to pricingRepo / usage cost.
 export async function defaultContext(now = Date.now()) {
   const { rate } = await getFloorRate(now);
+  const setting = await getPriceDefault();
   return {
     rate,
-    baseFor,
+    baseFor: async (name) => {
+      const i = name.indexOf("/");
+      if (i < 0) return null;
+      const real = await getPricingForModel(name.slice(0, i), name.slice(i + 1));
+      if (real) return real;
+      return setting.enabled ? { ...defaultBase(setting), defaulted: true } : null;
+    },
     comboModels: async (name) => {
       if (name.includes("/")) return null;
       const c = await getComboByName(name);

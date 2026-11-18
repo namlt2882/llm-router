@@ -10,58 +10,80 @@ const base = (n) => ({ input: n, output: n * 4, cached: n / 10, reasoning: n * 4
 const BASES = {
   "cc/cheap": base(1),
   "cc/dear": base(10),
+  "cc/third": { input: 1 / 3, output: 1, cached: 0.1, reasoning: 1, cache_creation: 0.5 },
   "cl/free-model": { input: 0, output: 0, cached: 0, reasoning: 0, cache_creation: 0 },
 };
 const COMBOS = {
   mixed: ["cc/cheap", "cc/dear"],
   outer: ["mixed", "cc/cheap"],
+  twice: ["cc/cheap", "cc/cheap", "cc/dear"],
   loop: ["loop2"],
   loop2: ["loop"],
   holey: ["cc/cheap", "cc/unknown"],
 };
-const ctxAt = (rate) => ({
+const DEFAULTED = { input: 0.05, output: 0.1, cached: 0.005, reasoning: 0.1, cache_creation: 0.05, defaulted: true };
+const ctxAt = (rate, { withDefault = false } = {}) => ({
   rate,
-  baseFor: async (name) => BASES[name] ?? null,
+  baseFor: async (name) => BASES[name] ?? (withDefault && name.includes("/") ? DEFAULTED : null),
   comboModels: async (name) => COMBOS[name] ?? null,
 });
-const price = (mult, rate, b) => ({
-  input: b.input * rate * mult,
-  output: b.output * rate * mult,
-  cached: b.cached * rate * mult,
-  reasoning: b.reasoning * rate * mult,
-  cacheCreation: b.cache_creation * rate * mult,
+// A USD price row equal to a base (mult 1 = exactly the floor).
+const usd = (mult, b) => ({
+  unit: "usd",
+  input: b.input * mult,
+  output: b.output * mult,
+  cached: b.cached * mult,
+  reasoning: b.reasoning * mult,
+  cacheCreation: b.cache_creation * mult,
 });
+const AVG_MIXED = { input: 5.5, output: 22, cached: 0.55, reasoning: 22, cache_creation: 6.875 };
 
 async function load() {
   vi.resetModules();
   return import("@/lib/pricing/validateSalePrice.js");
 }
 
-describe("validateSalePrice", () => {
-  it("a model priced exactly at base × rate passes, one unit below fails", async () => {
+describe("validateSalePrice (USD)", () => {
+  it("a model priced exactly at its base passes, a micro-unit below fails", async () => {
     const { validateSalePrice } = await load();
-    const at = { name: "cc/cheap", kind: "model", ...price(1, 25000, BASES["cc/cheap"]) };
+    const at = { name: "cc/cheap", kind: "model", ...usd(1, BASES["cc/cheap"]) };
     expect(await validateSalePrice(at, ctxAt(25000))).toEqual({ ok: true });
-    const below = { ...at, output: at.output - 1 };
-    expect(await validateSalePrice(below, ctxAt(25000))).toEqual({ ok: false, field: "output", minimum: at.output });
+    expect(await validateSalePrice({ ...at, output: 3.999999 }, ctxAt(25000))).toEqual({ ok: false, field: "output", minimum: 4 });
   });
 
-  it("a combo floors at its dearest member", async () => {
+  it("a combo floors at the average of its members, not the dearest", async () => {
     const { validateSalePrice } = await load();
-    const atDear = { name: "mixed", kind: "combo", ...price(1, 25000, BASES["cc/dear"]) };
+    const atAvg = { name: "mixed", kind: "combo", ...usd(1, AVG_MIXED) };
+    expect(await validateSalePrice(atAvg, ctxAt(25000))).toEqual({ ok: true });
+    const atDear = { name: "mixed", kind: "combo", ...usd(1, BASES["cc/dear"]) };
     expect(await validateSalePrice(atDear, ctxAt(25000))).toEqual({ ok: true });
-    const atCheap = { name: "mixed", kind: "combo", ...price(1, 25000, BASES["cc/cheap"]) };
-    const r = await validateSalePrice(atCheap, ctxAt(25000));
-    expect(r.ok).toBe(false);
-    expect(r.minimum).toBe(BASES["cc/dear"][r.field === "cacheCreation" ? "cache_creation" : r.field] * 25000);
+    const atCheap = { name: "mixed", kind: "combo", ...usd(1, BASES["cc/cheap"]) };
+    expect(await validateSalePrice(atCheap, ctxAt(25000))).toEqual({ ok: false, field: "input", minimum: 5.5 });
   });
 
-  it("a nested combo is expanded to its leaves", async () => {
+  it("a nested combo counts as one member at its own average", async () => {
+    const { costFloor } = await load();
+    const { floor } = await costFloor("outer", "combo", ctxAt(25000));
+    expect(floor).toMatchObject({ input: 3.25, output: 13 });
+  });
+
+  it("a duplicated member counts each time", async () => {
+    const { costFloor } = await load();
+    expect((await costFloor("twice", "combo", ctxAt(25000))).floor.input).toBe(4);
+  });
+
+  it("a fractional floor rounds up to 6 decimals", async () => {
     const { validateSalePrice } = await load();
-    const atCheap = { name: "outer", kind: "combo", ...price(1, 25000, BASES["cc/cheap"]) };
-    expect((await validateSalePrice(atCheap, ctxAt(25000))).ok).toBe(false);
-    const atDear = { name: "outer", kind: "combo", ...price(1, 25000, BASES["cc/dear"]) };
-    expect(await validateSalePrice(atDear, ctxAt(25000))).toEqual({ ok: true });
+    const row = { name: "cc/third", kind: "model", unit: "usd", input: 0.333334, output: 1, cached: 0.1, reasoning: 1, cacheCreation: 0.5 };
+    expect(await validateSalePrice(row, ctxAt(25000))).toEqual({ ok: true });
+    expect(await validateSalePrice({ ...row, input: 0.333333 }, ctxAt(25000))).toMatchObject({ ok: false, field: "input", minimum: 0.333334 });
+  });
+
+  it("the verdict does not depend on the FX rate", async () => {
+    const { validateSalePrice } = await load();
+    const at = { name: "cc/cheap", kind: "model", ...usd(1, BASES["cc/cheap"]) };
+    expect(await validateSalePrice(at, ctxAt(25000))).toEqual({ ok: true });
+    expect(await validateSalePrice(at, ctxAt(40000))).toEqual({ ok: true });
   });
 
   it("a free-namespace base of 0 accepts any non-negative price", async () => {
@@ -71,23 +93,32 @@ describe("validateSalePrice", () => {
     expect((await validateSalePrice({ ...zero, input: -1 }, ctxAt(25000))).ok).toBe(false);
   });
 
-  it("a name with no base price is unsellable, and so is a combo with an unpriced member", async () => {
+  it("a name with no base is unsellable, and so is a combo with an unpriced member", async () => {
     const { validateSalePrice } = await load();
-    const m = { name: "cc/unknown", kind: "model", ...price(1, 25000, BASES["cc/cheap"]) };
+    const m = { name: "cc/unknown", kind: "model", ...usd(1, BASES["cc/cheap"]) };
     expect(await validateSalePrice(m, ctxAt(25000))).toMatchObject({ ok: false, field: "name", reason: "unsellable" });
-    const c = { name: "holey", kind: "combo", ...price(9, 25000, BASES["cc/dear"]) };
+    const c = { name: "holey", kind: "combo", ...usd(9, BASES["cc/dear"]) };
     expect(await validateSalePrice(c, ctxAt(25000))).toMatchObject({ ok: false, field: "name", reason: "unsellable" });
+  });
+
+  it("with a default base the unpriced member counts and the floor reports it defaulted", async () => {
+    const { costFloor } = await load();
+    const r = await costFloor("holey", "combo", ctxAt(25000, { withDefault: true }));
+    expect(r.floor.input).toBe(0.525);
+    expect(r.defaulted).toBe(true);
+    const real = await costFloor("mixed", "combo", ctxAt(25000, { withDefault: true }));
+    expect(real.defaulted).toBe(false);
   });
 
   it("a combo that references itself is refused, not looped on", async () => {
     const { validateSalePrice } = await load();
-    const c = { name: "loop", kind: "combo", ...price(9, 25000, BASES["cc/dear"]) };
+    const c = { name: "loop", kind: "combo", ...usd(9, BASES["cc/dear"]) };
     expect(await validateSalePrice(c, ctxAt(25000))).toMatchObject({ ok: false, field: "name", reason: "combo_cycle" });
   });
 
   it("refuses a missing or non-numeric field and a kind that does not match the name", async () => {
     const { validateSalePrice } = await load();
-    const good = { name: "cc/cheap", kind: "model", ...price(1, 25000, BASES["cc/cheap"]) };
+    const good = { name: "cc/cheap", kind: "model", ...usd(1, BASES["cc/cheap"]) };
     expect(await validateSalePrice({ ...good, cached: undefined }, ctxAt(25000))).toMatchObject({ ok: false, field: "cached" });
     expect(await validateSalePrice({ ...good, input: "9" }, ctxAt(25000))).toMatchObject({ ok: false, field: "input" });
     expect(await validateSalePrice({ ...good, kind: "combo" }, ctxAt(25000))).toMatchObject({ ok: false, field: "kind" });
@@ -113,17 +144,24 @@ describe("sale price store", () => {
     fs.rmSync(tempDir, { recursive: true, force: true });
   });
 
-  it("a raised rate flags a stored row without rewriting it", async () => {
+  it("a rate move never flags a stored USD row; a legacy credit row is judged at the current rate", async () => {
     vi.resetModules();
     const repo = await import("@/lib/db/repos/salePriceRepo.js");
     const { listFlagged } = await import("@/lib/pricing/validateSalePrice.js");
-    const row = { name: "cc/cheap", kind: "model", ...price(1, 25000, BASES["cc/cheap"]) };
+    const row = { name: "cc/cheap", kind: "model", ...usd(1, BASES["cc/cheap"]) };
     await repo.setSalePrice(row);
     expect(await listFlagged(ctxAt(25000))).toEqual([]);
-    const flagged = await listFlagged(ctxAt(25000 * 1.05));
+    expect(await listFlagged(ctxAt(40000))).toEqual([]);
+    expect(await repo.getSalePrice("cc/cheap")).toMatchObject({ input: 1, unit: "usd" });
+
+    const credits = { name: "cc/cheap", kind: "model", input: 25000, output: 100000, cached: 2500, reasoning: 100000, cacheCreation: 31250 };
+    await repo.setSalePrice(credits);
+    expect(await listFlagged(ctxAt(25000))).toEqual([]);
+    await repo.setSalePrice({ ...credits, input: 24999 });
+    const flagged = await listFlagged(ctxAt(25000));
     expect(flagged.map((f) => f.name)).toEqual(["cc/cheap"]);
-    expect(flagged[0].violation.ok).toBe(false);
-    expect(await repo.getSalePrice("cc/cheap")).toMatchObject({ input: row.input });
+    expect(flagged[0].violation).toMatchObject({ ok: false, field: "input", minimum: 1 });
+    expect(await repo.getSalePrice("cc/cheap")).toMatchObject({ input: 24999 });
   });
 
   it("getSalePrice is null for an unpriced name and delete removes the row", async () => {
@@ -186,9 +224,9 @@ describe("/api/fork/saleprice", () => {
 
   it("PUT stores a valid price, 422s a below-floor one, GET lists, DELETE removes", async () => {
     const { GET, PUT, DELETE } = await loadRoute();
-    const good = { name: "cc/cheap", kind: "model", ...price(1, 25000, BASES["cc/cheap"]) };
+    const good = { name: "cc/cheap", kind: "model", ...usd(1, BASES["cc/cheap"]) };
     expect((await PUT(req("PUT", { body: good }))).status).toBe(200);
-    const low = await PUT(req("PUT", { body: { ...good, input: good.input - 1 } }));
+    const low = await PUT(req("PUT", { body: { ...good, input: 0.999999 } }));
     expect(low.status).toBe(422);
     expect(await low.json()).toMatchObject({ error: "below_floor", field: "input", minimum: good.input });
     const list = await (await GET(req("GET"))).json();
