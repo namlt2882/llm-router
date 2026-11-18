@@ -13,6 +13,6 @@ describe("GLM 5.3 base pricing", () => {
   });
 
   it("keeps glm-5 on its own price", () => {
-    expect(getPricingForModel("glm", "glm-5")).toMatchObject({ input: 1, output: 4, cached: 0.5 });
+    expect(getPricingForModel("glm", "glm-5")).toMatchObject({ input: 1, output: 3.2, cached: 0.2 });
   });
 });

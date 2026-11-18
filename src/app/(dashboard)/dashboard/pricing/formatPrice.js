@@ -16,3 +16,28 @@ export function parseDefaultBase({ enabled, input, cached, output }) {
   }
   return { body };
 }
+
+export function fmtTokens(n) {
+  if (!Number.isFinite(n)) return "-";
+  if (n >= 1_000_000 && n % 1_000_000 === 0) return `${n / 1_000_000}M`;
+  if (n >= 1_000 && n % 1_000 === 0) return `${n / 1_000}K`;
+  return String(n);
+}
+
+/** One "> 200K: input / cached / output" line per context tier of a price row, in the chosen unit. */
+export const tierLines = (row, mode, rate) =>
+  (row?.tiers ?? []).map((t) => `> ${fmtTokens(t.above)}: ${[t.input, t.cached, t.output].map((v) => showPrice(v, mode, rate)).join(" / ")}`);
+
+const TIER_KEYS = ["input", "cached", "output", "reasoning", "cacheCreation"];
+
+/** The tiers the edit form starts from: the live price's, else the cost floor's, with prices as strings for the inputs. */
+export function editTiersFrom(effective, floor) {
+  const source = effective?.tiers?.length ? effective.tiers : floor?.tiers ?? [];
+  return source.map((t) => ({ above: t.above, ...Object.fromEntries(TIER_KEYS.filter((k) => t[k] !== undefined).map((k) => [k, String(t[k])])) }));
+}
+
+/** Edited tier strings back to numbers for the PUT body; undefined when there are none. */
+export function tiersForSave(edit) {
+  if (!edit?.length) return undefined;
+  return edit.map((t) => ({ above: Number(t.above), ...Object.fromEntries(TIER_KEYS.filter((k) => t[k] !== undefined && t[k] !== "").map((k) => [k, Number(t[k])])) }));
+}

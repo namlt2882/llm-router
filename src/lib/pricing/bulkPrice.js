@@ -2,12 +2,18 @@ import { getSalePrice, setSalePrice, removeSalePrice } from "@/lib/db/repos/sale
 import { costFloor, validateSalePrice } from "@/lib/pricing/validateSalePrice.js";
 import { effectiveUsdPrice, resolveStored } from "@/lib/pricing/effectiveSalePrice.js";
 import { FIELDS, TOKEN_FIELDS, ceil6, round6, toUsdRow } from "@/lib/pricing/priceUnit.js";
+import { priceForPrompt, tierBreakpoints } from "../../../open-sse/utils/priceTiers.js";
 
 /** True when any token field of a USD price sits under the USD cost floor; false when the name has no floor. */
 export async function belowFloor(price, ctx) {
   const { floor, error } = await costFloor(price.name, price.kind, ctx);
   if (error) return false;
-  return TOKEN_FIELDS.some((f) => price[f] < floor[f]);
+  // Price and floor are both piecewise constant in the prompt size: test the first token of every interval.
+  return [0, ...tierBreakpoints(floor, price).map((b) => b + 1)].some((n) => {
+    const p = priceForPrompt(price, n);
+    const m = priceForPrompt(floor, n);
+    return TOKEN_FIELDS.some((f) => p[f] < m[f]);
+  });
 }
 
 const isActivePromo = (row, now) => !!row && row.source === "promo" && row.endsAt > now;
@@ -15,6 +21,13 @@ const isActivePromo = (row, now) => !!row && row.source === "promo" && row.endsA
 function scale(base, factor, round) {
   const out = {};
   for (const f of FIELDS) out[f] = round((Number(base[f] ?? 0) * factor) / 100);
+  if (Array.isArray(base.tiers) && base.tiers.length) {
+    out.tiers = base.tiers.map((t) => {
+      const o = { above: t.above };
+      for (const f of TOKEN_FIELDS) if (f in t) o[f] = round((Number(t[f]) * factor) / 100);
+      return o;
+    });
+  }
   return out;
 }
 

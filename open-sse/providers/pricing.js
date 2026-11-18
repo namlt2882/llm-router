@@ -1,3 +1,6 @@
+import { priceForPrompt } from "../utils/priceTiers.js";
+export { priceForPrompt };
+
 // Pricing rates for AI models — all rates in $/1M tokens
 //
 // Fallback order (first match wins):
@@ -56,7 +59,7 @@ export const MODEL_PRICING = {
   "claude-fable-5-2":             { input: 8.00,  output: 40.00, cached: 0.20,  reasoning: 40.00,  cache_creation: 10.00 },
   "claude-fable-5-1":             { input: 10.00, output: 50.00, cached: 1.00,  reasoning: 50.00,  cache_creation: 12.50 },
   "claude-fable-5":               { input: 10.00, output: 50.00, cached: 1.00,  reasoning: 50.00,  cache_creation: 12.50 },
-  "claude-haiku-5-5":             { input: 0.10,  output: 0.50,  cached: 0.01,  reasoning: 0.50,   cache_creation: 0.125 },
+  "claude-haiku-5-5": { input: 0.1, output: 0.5, cached: 0.01, reasoning: 0.5, cache_creation: 0.125, tiers: [{ above: 100000, input: 0.5, cached: 0.05, output: 2.5, reasoning: 2.5, cache_creation: 0.625 }] },
   "claude-sonnet-5-5":            { input: 2.00,  output: 10.00, cached: 0.20,  reasoning: 10.00,  cache_creation: 2.50  },
   "claude-sonnet-5-5-thinking":   { input: 2.00,  output: 10.00, cached: 0.20,  reasoning: 10.00,  cache_creation: 2.50  },
   "claude-sonnet-5-5-high":       { input: 2.00,  output: 10.00, cached: 0.20,  reasoning: 10.00,  cache_creation: 2.50  },
@@ -84,16 +87,15 @@ export const MODEL_PRICING = {
   "gpt-5.3-codex":                { input: 1.75,  output: 14.00, cached: 0.175, reasoning: 14.00,  cache_creation: 1.75  },
   "gpt-5.3-codex-spark":         { input: 3.00,  output: 12.00, cached: 0.30,  reasoning: 12.00,  cache_creation: 3.00  },
   "gpt-5.6":                      { input: 2.50,  output: 15.00, cached: 0.25,  reasoning: 15.00,  cache_creation: 2.50  },
-  "gpt-5.6-luna":                 { input: 1.00,  output: 6.00,  cached: 0.10,  reasoning: 6.00,   cache_creation: 1.00  },
+  "gpt-5.6-luna": { input: 0.2, output: 1.2, cached: 0.02, reasoning: 1.2, cache_creation: 0.2, tiers: [{ above: 272000, input: 0.4, cached: 0.04, output: 1.8, reasoning: 1.8, cache_creation: 0.4 }] },
   "gpt-5.6-terra":                { input: 2.50,  output: 15.00, cached: 0.25,  reasoning: 15.00,  cache_creation: 2.50  },
   "gpt-5.6-sol":                  { input: 5.00,  output: 30.00, cached: 0.50,  reasoning: 30.00,  cache_creation: 5.00  },
-  // OpenAI Standard short-context pricing (developers.openai.com/api/docs/pricing).
-  // Long-context pricing is higher, but this table currently stores one rate per model.
+  // OpenAI Standard short-context pricing (developers.openai.com/api/docs/pricing); luna carries its long-context tier.
   "gpt-6-astra":                  { input: 10.00, output: 50.00, cached: 1.00,  reasoning: 50.00,  cache_creation: 12.50 },
   "gpt-6.1-sol":                  { input: 2.00,  output: 10.00, cached: 0.10,  reasoning: 10.00,  cache_creation: 2.50  },
   "gpt-6.1-terra":                { input: 1.00,  output: 5.00,  cached: 0.05,  reasoning: 5.00,   cache_creation: 1.25  },
   "gpt-6-sol":                    { input: 2.00,  output: 10.00, cached: 0.20,  reasoning: 10.00,  cache_creation: 2.50  },
-  "gpt-6-luna":                   { input: 0.10,  output: 0.50,  cached: 0.01,  reasoning: 0.50,   cache_creation: 0.125 },
+  "gpt-6-luna": { input: 0.1, output: 0.5, cached: 0.01, reasoning: 0.5, cache_creation: 0.125, tiers: [{ above: 272000, input: 0.2, cached: 0.02, output: 0.75, reasoning: 0.75, cache_creation: 0.25 }] },
   "o1":                           { input: 15.00, output: 60.00, cached: 7.50,  reasoning: 90.00,  cache_creation: 15.00 },
   "o1-mini":                      { input: 3.00,  output: 12.00, cached: 1.50,  reasoning: 18.00,  cache_creation: 3.00  },
 
@@ -126,6 +128,13 @@ export const MODEL_PRICING = {
   "gemini-2.5-flash-lite":        { input: 0.15,  output: 1.25,  cached: 0.015, reasoning: 1.875,  cache_creation: 0.15  },
 
   // === Qwen ===
+  // Alibaba Model Studio (international). Cache hit is not listed per model: the implicit-cache rate is 20% of input.
+  "qwen3.5-plus":                 { input: 0.4, output: 2.4, cached: 0.08, reasoning: 2.4, cache_creation: 0.4, tiers: [{ above: 256000, input: 0.5, cached: 0.1, output: 3, reasoning: 3, cache_creation: 0.5 }] },
+  "qwen3.6-plus":                 { input: 0.5, output: 3, cached: 0.1, reasoning: 3, cache_creation: 0.5, tiers: [{ above: 256000, input: 2, cached: 0.4, output: 6, reasoning: 6, cache_creation: 2 }] },
+  "qwen3.7-plus":                 { input: 0.4, output: 1.6, cached: 0.08, reasoning: 1.6, cache_creation: 0.4, tiers: [{ above: 256000, input: 1.2, cached: 0.24, output: 4.8, reasoning: 4.8, cache_creation: 1.2 }] },
+  "qwen3.7-max":                  { input: 2.5, output: 7.5, cached: 0.5, reasoning: 7.5, cache_creation: 2.5 },
+  "qwen3.8-flash":                { input: 0.15, output: 0.47, cached: 0.03, reasoning: 0.47, cache_creation: 0.15 },
+  "qwen3.8-max":                  { input: 2, output: 6, cached: 0.25, reasoning: 6, cache_creation: 2 },
   "qwen3-coder-plus":             { input: 1.00,  output: 4.00,  cached: 0.50,  reasoning: 6.00,   cache_creation: 1.00  },
   "qwen3-coder-flash":            { input: 0.50,  output: 2.00,  cached: 0.25,  reasoning: 3.00,   cache_creation: 0.50  },
 
@@ -140,9 +149,9 @@ export const MODEL_PRICING = {
   "kimi-for-coding-highspeed":    { input: 1.90,  output: 8.00,  cached: 0.38,  reasoning: 8.00,   cache_creation: 1.90  },
   "kimi-k2":                      { input: 1.00,  output: 4.00,  cached: 0.50,  reasoning: 6.00,   cache_creation: 1.00  },
   "kimi-k2-thinking":             { input: 1.50,  output: 6.00,  cached: 0.75,  reasoning: 9.00,   cache_creation: 1.50  },
-  "kimi-k2.5":                    { input: 1.20,  output: 4.80,  cached: 0.60,  reasoning: 7.20,   cache_creation: 1.20  },
+  "kimi-k2.5": { input: 0.6, output: 3.0, cached: 0.1, reasoning: 3.0, cache_creation: 0.6 },
   "kimi-k2.5-thinking":           { input: 1.80,  output: 7.20,  cached: 0.90,  reasoning: 10.80,  cache_creation: 1.80  },
-  "kimi-k2.6":                    { input: 1.00,  output: 4.00,  cached: 0.50,  reasoning: 6.00,   cache_creation: 1.00  },
+  "kimi-k2.6": { input: 0.95, output: 4.0, cached: 0.16, reasoning: 4.0, cache_creation: 0.95 },
   "kimi-latest":                  { input: 1.00,  output: 4.00,  cached: 0.50,  reasoning: 6.00,   cache_creation: 1.00  },
 
   // === DeepSeek ===
@@ -151,30 +160,39 @@ export const MODEL_PRICING = {
   "deepseek-r1":                  { input: 0.14,  output: 0.28,  cached: 0.0028, reasoning: 0.28,   cache_creation: 0.14  },
   "deepseek-v3.2-chat":           { input: 0.14,  output: 0.28,  cached: 0.0028, reasoning: 0.28,   cache_creation: 0.14  },
   "deepseek-v3.2-reasoner":       { input: 0.14,  output: 0.28,  cached: 0.0028, reasoning: 0.28,   cache_creation: 0.14  },
-  "deepseek-v4-flash":            { input: 0.14,  output: 0.28,  cached: 0.0028, reasoning: 0.28,   cache_creation: 0.14  },
-  "deepseek-v4.1-flash":          { input: 0.14,  output: 0.28,  cached: 0.0028, reasoning: 0.28,   cache_creation: 0.14  },
-  "deepseek-flash":               { input: 0.14,  output: 0.28,  cached: 0.0028, reasoning: 0.28,   cache_creation: 0.14  },
-  "deepseek-v4-pro":              { input: 0.435, output: 0.87,  cached: 0.003625, reasoning: 0.87,  cache_creation: 0.435 },
+  "deepseek-v4-flash": { input: 0.3, output: 1.2, cached: 0.006, reasoning: 1.2, cache_creation: 0.3 },
+  "deepseek-v4.1-flash": { input: 0.3, output: 1.2, cached: 0.006, reasoning: 1.2, cache_creation: 0.3 },
+  "deepseek-flash": { input: 0.3, output: 1.2, cached: 0.006, reasoning: 1.2, cache_creation: 0.3 },
+  "deepseek-v4-pro": { input: 1.32, output: 3.96, cached: 0.044, reasoning: 3.96, cache_creation: 1.32 },
 
   // === GLM ===
-  "glm-4.6":                      { input: 0.50,  output: 2.00,  cached: 0.25,  reasoning: 3.00,   cache_creation: 0.50  },
-  "glm-4.6v":                     { input: 0.75,  output: 3.00,  cached: 0.375, reasoning: 4.50,   cache_creation: 0.75  },
-  "glm-4.7":                      { input: 0.75,  output: 3.00,  cached: 0.375, reasoning: 4.50,   cache_creation: 0.75  },
-  "glm-5":                        { input: 1.00,  output: 4.00,  cached: 0.50,  reasoning: 6.00,   cache_creation: 1.00  },
+  "glm-4.6": { input: 0.6, output: 2.2, cached: 0.11, reasoning: 2.2, cache_creation: 0.6 },
+  "glm-4.6v": { input: 0.3, output: 0.9, cached: 0.05, reasoning: 0.9, cache_creation: 0.3 },
+  "glm-4.7": { input: 0.6, output: 2.2, cached: 0.11, reasoning: 2.2, cache_creation: 0.6 },
+  "glm-5": { input: 1.0, output: 3.2, cached: 0.2, reasoning: 3.2, cache_creation: 1.0 },
   // docs.z.ai/guides/overview/pricing; reasoning bills as output, cache storage is free (write = input)
+  "glm-5.1":                      { input: 1.40,  output: 4.40,  cached: 0.26,  reasoning: 4.40,   cache_creation: 1.40  },
+  "glm-5.2":                      { input: 1.40,  output: 4.40,  cached: 0.26,  reasoning: 4.40,   cache_creation: 1.40  },
+  "glm-5-turbo":                  { input: 1.20,  output: 4.00,  cached: 0.24,  reasoning: 4.00,   cache_creation: 1.20  },
   "glm-5.3":                      { input: 1.40,  output: 4.40,  cached: 0.26,  reasoning: 4.40,   cache_creation: 1.40  },
   "glm-5.3-flash":                { input: 0.15,  output: 0.50,  cached: 0.03,  reasoning: 0.50,   cache_creation: 0.15  },
   "glm-5.3-flashx":               { input: 0.37,  output: 1.25,  cached: 0.075, reasoning: 1.25,   cache_creation: 0.37  },
 
   // === MiniMax ===
-  "MiniMax-M3":                   { input: 0.30,  output: 1.20,  cached: 0.06,  reasoning: 1.80,   cache_creation: 0.30  },
+  "MiniMax-M3": { input: 0.3, output: 1.2, cached: 0.06, reasoning: 1.2, cache_creation: 0.3, tiers: [{ above: 512000, input: 0.6, cached: 0.12, output: 2.4, reasoning: 2.4, cache_creation: 0.6 }] },
+  "minimax-m3": { input: 0.3, output: 1.2, cached: 0.06, reasoning: 1.2, cache_creation: 0.3, tiers: [{ above: 512000, input: 0.6, cached: 0.12, output: 2.4, reasoning: 2.4, cache_creation: 0.6 }] },
   "MiniMax-M2.1":                 { input: 0.50,  output: 2.00,  cached: 0.25,  reasoning: 3.00,   cache_creation: 0.50  },
-  "MiniMax-M2.5":                 { input: 0.50,  output: 2.00,  cached: 0.25,  reasoning: 3.00,   cache_creation: 0.50  },
-  "MiniMax-M2.7":                 { input: 0.50,  output: 2.00,  cached: 0.25,  reasoning: 3.00,   cache_creation: 0.50  },
+  "MiniMax-M2.5": { input: 0.3, output: 1.2, cached: 0.03, reasoning: 1.2, cache_creation: 0.3 },
+  "minimax-m2.5": { input: 0.3, output: 1.2, cached: 0.03, reasoning: 1.2, cache_creation: 0.3 },
+  "MiniMax-M2.7": { input: 0.3, output: 1.2, cached: 0.06, reasoning: 1.2, cache_creation: 0.3 },
+  "minimax-m2.7": { input: 0.3, output: 1.2, cached: 0.06, reasoning: 1.2, cache_creation: 0.3 },
   "minimax-m2.1":                 { input: 0.50,  output: 2.00,  cached: 0.25,  reasoning: 3.00,   cache_creation: 0.50  },
-  "minimax-m2.5":                 { input: 0.60,  output: 2.40,  cached: 0.30,  reasoning: 3.60,   cache_creation: 0.60  },
 
   // === Grok ===
+  // docs.x.ai: a prompt over 200K tokens bills every token at the higher rate
+  "grok-4.5":                     { input: 2, output: 6, cached: 0.3, reasoning: 6, cache_creation: 2, tiers: [{ above: 200000, input: 4, cached: 0.6, output: 12, reasoning: 12, cache_creation: 4 }] },
+  "grok-4.6":                     { input: 2, output: 6, cached: 0.5, reasoning: 6, cache_creation: 2, tiers: [{ above: 200000, input: 4, cached: 1, output: 12, reasoning: 12, cache_creation: 4 }] },
+  "grok-4.7":                     { input: 2, output: 6, cached: 0.5, reasoning: 6, cache_creation: 2, tiers: [{ above: 200000, input: 4, cached: 1, output: 12, reasoning: 12, cache_creation: 4 }] },
   "grok-code-fast-1":             { input: 0.50,  output: 2.00,  cached: 0.25,  reasoning: 3.00,   cache_creation: 0.50  },
 
   // === Muse (Meta Model API) ===
@@ -331,6 +349,19 @@ export const PROVIDER_PRICING = {
  * First match wins — order matters.
  */
 export const PATTERN_PRICING = [
+  // --- Tiered models: a suffixed variant (-thinking, [1m], a date) bills like its base row, tiers included.
+  // These must precede the vendor globs below, which would price the variant as a generic model.
+  { pattern: "claude-haiku-5-5*", pricing: MODEL_PRICING["claude-haiku-5-5"] },
+  { pattern: "gpt-5.6-luna*",     pricing: MODEL_PRICING["gpt-5.6-luna"] },
+  { pattern: "gpt-6-luna*",       pricing: MODEL_PRICING["gpt-6-luna"] },
+  { pattern: "qwen3.5-plus*",     pricing: MODEL_PRICING["qwen3.5-plus"] },
+  { pattern: "qwen3.6-plus*",     pricing: MODEL_PRICING["qwen3.6-plus"] },
+  { pattern: "qwen3.7-plus*",     pricing: MODEL_PRICING["qwen3.7-plus"] },
+  { pattern: "minimax-m3*",       pricing: MODEL_PRICING["minimax-m3"] },
+  { pattern: "grok-4.5*",         pricing: MODEL_PRICING["grok-4.5"] },
+  { pattern: "grok-4.6*",         pricing: MODEL_PRICING["grok-4.6"] },
+  { pattern: "grok-4.7*",         pricing: MODEL_PRICING["grok-4.7"] },
+
   // --- Codex variants ---
   { pattern: "*-codex-xhigh",   pricing: { input: 10.00, output: 40.00, cached: 5.00,  reasoning: 60.00,  cache_creation: 10.00 } },
   { pattern: "*-codex-high",    pricing: { input: 8.00,  output: 32.00, cached: 4.00,  reasoning: 48.00,  cache_creation: 8.00  } },
@@ -386,11 +417,11 @@ export const PATTERN_PRICING = [
   { pattern: "kimi-k2*",        pricing: { input: 1.20,  output: 4.80,  cached: 0.60,  reasoning: 7.20,   cache_creation: 1.20  } },
   { pattern: "kimi-*",          pricing: { input: 1.00,  output: 4.00,  cached: 0.50,  reasoning: 6.00,   cache_creation: 1.00  } },
 
-  // --- DeepSeek ---
-  { pattern: "deepseek-*reasoner*", pricing: { input: 0.14, output: 0.28, cached: 0.0028, reasoning: 0.28, cache_creation: 0.14 } },
-  { pattern: "deepseek-r*",     pricing: { input: 0.14,  output: 0.28,  cached: 0.0028, reasoning: 0.28,   cache_creation: 0.14  } },
-  { pattern: "deepseek-v*",     pricing: { input: 0.14,  output: 0.28,  cached: 0.0028, reasoning: 0.28,   cache_creation: 0.14  } },
-  { pattern: "deepseek-*",      pricing: { input: 0.14,  output: 0.28,  cached: 0.0028, reasoning: 0.28,   cache_creation: 0.14  } },
+  // --- DeepSeek --- (peak rate, so a sale is never under cost)
+  { pattern: "deepseek-*reasoner*", pricing: { input: 0.30, output: 1.20, cached: 0.006, reasoning: 1.20, cache_creation: 0.30 } },
+  { pattern: "deepseek-r*",     pricing: { input: 0.30,  output: 1.20,  cached: 0.006,  reasoning: 1.20,   cache_creation: 0.30  } },
+  { pattern: "deepseek-v*",     pricing: { input: 0.30,  output: 1.20,  cached: 0.006,  reasoning: 1.20,   cache_creation: 0.30  } },
+  { pattern: "deepseek-*",      pricing: { input: 0.30,  output: 1.20,  cached: 0.006,  reasoning: 1.20,   cache_creation: 0.30  } },
 
   // --- GLM ---
   { pattern: "glm-5*",          pricing: { input: 1.00,  output: 4.00,  cached: 0.50,  reasoning: 6.00,   cache_creation: 1.00  } },
@@ -482,6 +513,7 @@ export function calculateCostFromTokens(tokens, pricing) {
   let cost = 0;
 
   const inputTokens = tokens.prompt_tokens || tokens.input_tokens || 0;
+  pricing = priceForPrompt(pricing, inputTokens);
   const cachedTokens = tokens.cached_tokens || tokens.cache_read_input_tokens || 0;
   const cacheCreationTokens = tokens.cache_creation_input_tokens || 0;
   // prompt_tokens is cache-inclusive (see canonicalizeUsage): cached + cache_creation

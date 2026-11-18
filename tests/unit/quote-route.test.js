@@ -174,3 +174,35 @@ describe("POST /api/fork/quote", () => {
     }
   });
 });
+
+describe("POST /api/fork/quote with context tiers", () => {
+  const TIERED = { name: "cc/tiered", kind: "model", unit: "usd", input: 1, output: 4, cached: 0.1, reasoning: 4, cacheCreation: 1.25, perImage: 0,
+    tiers: [{ above: 100_000, input: 2, output: 8, cached: 0.2, reasoning: 8, cacheCreation: 2.5 }] };
+  beforeEach(() => {
+    dropAdapter();
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "9router-fork-quote-tier-"));
+    process.env.DATA_DIR = tempDir;
+  });
+  afterEach(() => {
+    dropAdapter();
+    vi.unstubAllEnvs();
+    vi.doUnmock("@/lib/fx/fxRate.js");
+    if (originalDataDir === undefined) delete process.env.DATA_DIR;
+    else process.env.DATA_DIR = originalDataDir;
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  it("reserves at the tier of the input size and returns the tiers in credits", async () => {
+    const { POST } = await loadRoute();
+    const repo = await import("@/lib/db/repos/salePriceRepo.js");
+    await repo.setSalePrice(TIERED);
+    // The caller only estimates the prompt, so the hold uses the dearer of the tier at the input size and at 1.25x it.
+    const short = await (await POST(post({ model: "cc/tiered", inputTokens: 80_000, maxTokens: 10_000 }))).json();
+    const nearEdge = await (await POST(post({ model: "cc/tiered", inputTokens: 80_001, maxTokens: 10_000 }))).json();
+    const long = await (await POST(post({ model: "cc/tiered", inputTokens: 100_001, maxTokens: 10_000 }))).json();
+    expect(short.creditsWorstCase).toBe(Math.ceil(((80_000 * 25_000 + 10_000 * 100_000) / 1e6) * 1.01 - 1e-9));
+    expect(nearEdge.creditsWorstCase).toBe(Math.ceil(((80_001 * 50_000 + 10_000 * 200_000) / 1e6) * 1.01 - 1e-9));
+    expect(long.creditsWorstCase).toBe(Math.ceil(((100_001 * 50_000 + 10_000 * 200_000) / 1e6) * 1.01 - 1e-9));
+    expect(long.sale.tiers).toEqual([{ above: 100_000, input: 50_000, output: 200_000, cached: 5_000, reasoning: 200_000, cacheCreation: 62_500 }]);
+  });
+});

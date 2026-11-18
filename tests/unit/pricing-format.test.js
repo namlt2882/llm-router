@@ -31,3 +31,34 @@ describe("pricing format", () => {
     expect(parseDefaultBase({ enabled: false, input: "0", cached: "0", output: "0" }).body).toEqual({ enabled: false, input: 0, cached: 0, output: 0 });
   });
 });
+
+import { fmtTokens, tierLines, editTiersFrom, tiersForSave } from "@/app/(dashboard)/dashboard/pricing/formatPrice.js";
+
+describe("context tiers in the pricing page", () => {
+  const tiers = [{ above: 200_000, input: 4, cached: 0.6, output: 12, reasoning: 12, cacheCreation: 4 }];
+
+  it("fmtTokens shortens a token count", () => {
+    expect(fmtTokens(100_000)).toBe("100K");
+    expect(fmtTokens(272_000)).toBe("272K");
+    expect(fmtTokens(1_000_000)).toBe("1M");
+    expect(fmtTokens(512)).toBe("512");
+  });
+
+  it("tierLines is empty for a flat row and one line per tier otherwise, in the chosen unit", () => {
+    expect(tierLines({ input: 1 }, "usd", 25000)).toEqual([]);
+    expect(tierLines({ tiers }, "usd", 25000)).toEqual(["> 200K: 4 / 0.6 / 12"]);
+    expect(tierLines({ tiers }, "vnd", 25000)).toEqual(["> 200K: 100,000 / 15,000 / 300,000"]);
+  });
+
+  it("editTiersFrom starts from the live price's tiers, else the floor's, as strings", () => {
+    const floor = { tiers };
+    expect(editTiersFrom({ tiers: [{ ...tiers[0], input: 5 }] }, floor)[0].input).toBe("5");
+    expect(editTiersFrom({}, floor)[0]).toMatchObject({ above: 200_000, input: "4", output: "12" });
+    expect(editTiersFrom({}, {})).toEqual([]);
+  });
+
+  it("tiersForSave turns the edited strings into numbers and omits an empty list", () => {
+    expect(tiersForSave([{ above: 200_000, input: "4", cached: "0.6", output: "12", reasoning: "12", cacheCreation: "4" }])).toEqual(tiers);
+    expect(tiersForSave([])).toBeUndefined();
+  });
+});

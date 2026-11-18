@@ -35,3 +35,21 @@ describe("selectedVisible", () => {
     expect(selectedVisible([rows[1]], new Set(["a", "b"])).map((r) => r.name)).toEqual(["b"]);
   });
 });
+
+describe("bulkPreview with tiers", () => {
+  const tiered = (over = {}) => row({
+    floor: { input: 1, output: 4, cached: 0.1, reasoning: 4, cacheCreation: 1.25, tiers: [{ above: 100, input: 2, output: 8, cached: 0.2, reasoning: 8, cacheCreation: 2.5 }] },
+    effective: { input: 1, output: 4, cached: 0.1, reasoning: 4, cacheCreation: 1.25, tiers: [{ above: 100, input: 2, output: 8, cached: 0.2, reasoning: 8, cacheCreation: 2.5 }] },
+    ...over,
+  });
+  it("a promotion is under the floor when only a tier falls below its tier floor", () => {
+    expect(bulkPreview(tiered(), "promo", 10)).toMatchObject({ under: true });
+  });
+  it("a markup keeps every tier at or above its floor", () => {
+    expect(bulkPreview(tiered(), "markup", 10)).toMatchObject({ to: 1.1, under: false });
+  });
+  it("a flat stored price under a tiered floor is under the floor even before the percent", () => {
+    const r = tiered({ effective: { input: 1, output: 4, cached: 0.1, reasoning: 4, cacheCreation: 1.25 } });
+    expect(bulkPreview(r, "markup", 10)).toMatchObject({ under: true });
+  });
+});

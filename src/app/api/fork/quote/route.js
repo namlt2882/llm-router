@@ -6,6 +6,7 @@ import { belowFloor } from "@/lib/pricing/bulkPrice.js";
 import { getFloorRate } from "@/lib/fx/fxRate.js";
 import { getSalePrice } from "@/lib/db/repos/salePriceRepo.js";
 import { resolveStored } from "@/lib/pricing/effectiveSalePrice.js";
+import { priceForReserve } from "../../../../../open-sse/utils/priceTiers.js";
 
 const NO_STORE = { "Cache-Control": "no-store" };
 const MAX_COUNT = 1e12;
@@ -47,14 +48,16 @@ export async function POST(request) {
   }
   const promo = sale.source === "promo";
   const promoUnderFloor = promo ? await belowFloor(await effectiveUsdPrice(body.model), await defaultContext()).catch(() => false) : false;
-  const perMillion = inputTokens * sale.input + maxTokens * sale.output + reasoning * sale.reasoning;
+  // A long prompt bills every token at its tier, so the worst case is priced at the dearer tier the input size or 1.25x it lands in (the caller only estimates).
+  const at = priceForReserve(sale, inputTokens);
+  const perMillion = inputTokens * at.input + maxTokens * at.output + reasoning * at.reasoning;
   const floats = sale.auto === true || (await storedIsUsd(body.model));
   const fxHeadroom = floats ? FX_HEADROOM : 1;
   const creditsWorstCase = Math.ceil((perMillion / 1e6) * fxHeadroom - 1e-9) + Math.ceil(images * (sale.perImage || 0) * fxHeadroom - 1e-9);
   return NextResponse.json(
     {
       creditsWorstCase,
-      sale: { input: sale.input, output: sale.output, cached: sale.cached, reasoning: sale.reasoning, cacheCreation: sale.cacheCreation, perImage: sale.perImage || 0, ...(sale.auto ? { auto: true } : {}), ...(promo ? { endsAt: sale.endsAt, ...(promoUnderFloor ? { belowFloor: true } : {}) } : {}) },
+      sale: { input: sale.input, output: sale.output, cached: sale.cached, reasoning: sale.reasoning, cacheCreation: sale.cacheCreation, perImage: sale.perImage || 0, ...(sale.tiers?.length ? { tiers: sale.tiers } : {}), ...(sale.auto ? { auto: true } : {}), ...(promo ? { endsAt: sale.endsAt, ...(promoUnderFloor ? { belowFloor: true } : {}) } : {}) },
       floorRate: rate,
       fxHeadroom,
     },

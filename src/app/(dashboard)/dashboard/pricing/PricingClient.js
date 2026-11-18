@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Badge, Button, Card, Input, Select } from "@/shared/components";
 import { filterRows } from "./filterRows.js";
-import { fmtUsd, parseDefaultBase, showPrice } from "./formatPrice.js";
+import { editTiersFrom, fmtTokens, fmtUsd, parseDefaultBase, showPrice, tierLines, tiersForSave } from "./formatPrice.js";
 import { bulkPreview, selectedVisible } from "./bulkPreview.js";
 
 const FIELDS = [
@@ -111,8 +111,10 @@ export default function PricingClient() {
       return next;
     });
 
-  async function saveRow(row, edit) {
+  async function saveRow(row, edit, tiers) {
     const entry = { name: row.name, kind: row.kind, unit: "usd" };
+    const saved = tiersForSave(tiers);
+    if (saved) entry.tiers = saved;
     for (const [k] of FIELDS) {
       if (edit[k] === "" || edit[k] === undefined) {
         if (k === "perImage") continue;
@@ -351,7 +353,7 @@ export default function PricingClient() {
                   flagged={flaggedNames.has(row.name)}
                   error={rowErrors[row.name]}
                   onToggle={() => toggle(row.name)}
-                  onSave={(edit) => saveRow(row, edit)}
+                  onSave={(edit, tiers) => saveRow(row, edit, tiers)}
                   onAuto={() => backToAuto(row)}
                 />
               ))}
@@ -385,12 +387,16 @@ function StatusBadges({ row, flagged }) {
 function PriceRow({ row, mode, rate, checked, flagged, error, onToggle, onSave, onAuto }) {
   const [open, setOpen] = useState(false);
   const [edit, setEdit] = useState({});
+  const [editTiers, setEditTiers] = useState([]);
   const locked = row.status === "no_base_price";
   const startEdit = () => {
     setEdit({ ...(row.effective || {}) });
+    setEditTiers(editTiersFrom(row.effective, row.floor));
     setOpen(true);
   };
-  const dirty = FIELDS.some(([k]) => String(edit[k] ?? "") !== String(row.effective?.[k] ?? ""));
+  const dirty =
+    FIELDS.some(([k]) => String(edit[k] ?? "") !== String(row.effective?.[k] ?? "")) ||
+    JSON.stringify(editTiers) !== JSON.stringify(editTiersFrom(row.effective, row.floor));
   return (
     <>
       <tr className={row.belowFloor || flagged ? "bg-red-500/5" : ""}>
@@ -399,8 +405,14 @@ function PriceRow({ row, mode, rate, checked, flagged, error, onToggle, onSave, 
         </td>
         <td className="py-1 pr-3 font-mono">{row.name}</td>
         <td className="py-1 pr-3">{row.kind}</td>
-        <td className="py-1 pr-3 whitespace-nowrap">{row.floor ? [row.floor.input, row.floor.cached, row.floor.output].map((v) => showPrice(v, mode, rate)).join(" / ") : "-"}</td>
-        <td className="py-1 pr-3 whitespace-nowrap">{row.effective ? [row.effective.input, row.effective.cached, row.effective.output].map((v) => showPrice(v, mode, rate)).join(" / ") : "-"}</td>
+        <td className="py-1 pr-3 whitespace-nowrap">
+          {row.floor ? [row.floor.input, row.floor.cached, row.floor.output].map((v) => showPrice(v, mode, rate)).join(" / ") : "-"}
+          {tierLines(row.floor, mode, rate).map((l) => <div key={l} className="text-xs text-text-muted">{l}</div>)}
+        </td>
+        <td className="py-1 pr-3 whitespace-nowrap">
+          {row.effective ? [row.effective.input, row.effective.cached, row.effective.output].map((v) => showPrice(v, mode, rate)).join(" / ") : "-"}
+          {tierLines(row.effective, mode, rate).map((l) => <div key={l} className="text-xs text-text-muted">{l}</div>)}
+        </td>
         <td className="py-1 pr-3"><StatusBadges row={row} flagged={flagged} /></td>
         <td className="py-1 text-right whitespace-nowrap">
           {!locked && <Button size="sm" variant="ghost" onClick={open ? () => setOpen(false) : startEdit}>{open ? "Close" : "Edit"}</Button>}
@@ -424,8 +436,25 @@ function PriceRow({ row, mode, rate, checked, flagged, error, onToggle, onSave, 
                   />
                 </label>
               ))}
-              <Button size="sm" disabled={!dirty} onClick={async () => (await onSave(edit)) && setOpen(false)}>Save</Button>
+              <Button size="sm" disabled={!dirty} onClick={async () => (await onSave(edit, editTiers)) && setOpen(false)}>Save</Button>
             </div>
+            {editTiers.map((t, i) => (
+              <div key={t.above} className="mt-2 flex flex-wrap items-end gap-3">
+                <span className="text-xs text-text-muted">{`Prompt over ${fmtTokens(t.above)} tokens, every token at`}</span>
+                {FIELDS.filter(([k]) => k !== "perImage").map(([k, label]) => (
+                  <label key={k} className="flex flex-col text-xs text-text-muted">
+                    {`${label} (USD)`}
+                    <input
+                      aria-label={`${row.name} over ${fmtTokens(t.above)} ${k}`}
+                      type="number"
+                      className="w-28 rounded-md bg-surface-2 px-2 py-1 text-sm text-text-main"
+                      value={t[k] ?? ""}
+                      onChange={(e) => setEditTiers(editTiers.map((x, j) => (j === i ? { ...x, [k]: e.target.value } : x)))}
+                    />
+                  </label>
+                ))}
+              </div>
+            ))}
             {row.status === "promo" && <p className="mt-2 text-xs text-text-muted">Saving a manual price ends this promotion.</p>}
           </td>
         </tr>

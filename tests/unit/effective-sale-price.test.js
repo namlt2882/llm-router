@@ -112,3 +112,17 @@ describe("promotion expiry (USD)", () => {
     expect(resolveStored(usdRow, 1e15)).toBe(usdRow);
   });
 });
+
+describe("tiers on the auto price", () => {
+  const tiered = { input: 1, output: 4, cached: 0.1, reasoning: 4, cache_creation: 1.25, tiers: [{ above: 100, input: 2, output: 8, cached: 0.2, reasoning: 8, cache_creation: 2.5 }] };
+  const tctx = { rate: 25000, baseFor: async (n) => (n === "cc/t" ? tiered : null), comboModels: async () => null };
+
+  it("a model with no stored price sells at its floor, long-prompt tier included, in credits", async () => {
+    const { effectiveSalePrice, effectiveUsdPrice } = await load();
+    const usd = await effectiveUsdPrice("cc/t", { stored: none, ctx: tctx });
+    expect(usd.tiers).toEqual([{ above: 100, input: 2, output: 8, cached: 0.2, reasoning: 8, cacheCreation: 2.5 }]);
+    const credits = await effectiveSalePrice("cc/t", { stored: none, ctx: tctx });
+    expect(credits).toMatchObject({ input: 25000, output: 100000 });
+    expect(credits.tiers).toEqual([{ above: 100, input: 50000, output: 200000, cached: 5000, reasoning: 200000, cacheCreation: 62500 }]);
+  });
+});

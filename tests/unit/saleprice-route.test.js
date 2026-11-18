@@ -15,7 +15,9 @@ function dropAdapter() {
   delete global._dbAdapter;
 }
 
-async function loadRoute({ fxFails = false } = {}) {
+const SONNET = { input: 3, output: 15, cached: 0.3, reasoning: 15, cache_creation: 3.75 };
+
+async function loadRoute({ fxFails = false, base = SONNET } = {}) {
   vi.resetModules();
   vi.stubEnv("WAVEBOT_FORK_ADMIN_TOKEN", "secret-token");
   vi.doMock("next/server", () => ({
@@ -32,7 +34,7 @@ async function loadRoute({ fxFails = false } = {}) {
   }));
   vi.doMock("@/lib/db/repos/pricingRepo.js", () => ({
     getPricingForModel: async (provider, model) =>
-      provider === "cc" && model === "claude-sonnet-4-6" ? { input: 3, output: 15, cached: 0.3, reasoning: 15, cache_creation: 3.75 } : null,
+      provider === "cc" && model === "claude-sonnet-4-6" ? base : null,
   }));
   vi.doMock("@/lib/db/repos/combosRepo.js", () => ({ getComboByName: async () => null }));
   const repo = await import("@/lib/db/repos/salePriceRepo.js");
@@ -147,5 +149,39 @@ describe("/api/fork/saleprice (USD)", () => {
     await repo.setSalePrice(legacy);
     expect((await GET(req("GET"))).status).toBe(503);
     expect(await repo.getSalePrice(NAME)).toEqual(legacy);
+  });
+});
+
+describe("/api/fork/saleprice tiers", () => {
+  beforeEach(() => {
+    dropAdapter();
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "9router-fork-saleprice-tier-"));
+    process.env.DATA_DIR = tempDir;
+  });
+  afterEach(() => {
+    dropAdapter();
+    vi.unstubAllEnvs();
+    for (const m of ["@/lib/fx/fxRate.js", "@/lib/db/repos/pricingRepo.js", "@/lib/db/repos/combosRepo.js"]) vi.doUnmock(m);
+    if (originalDataDir === undefined) delete process.env.DATA_DIR;
+    else process.env.DATA_DIR = originalDataDir;
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  it("PUT keeps a valid tiers array and refuses one under the tier floor", async () => {
+    const tiered = { ...SONNET, tiers: [{ above: 1000, input: 6, output: 30, cached: 0.6, reasoning: 30, cache_creation: 7.5 }] };
+    const { PUT, repo } = await loadRoute({ base: tiered });
+    const good = usd({ tiers: [{ above: 1000, input: 6, output: 30, cached: 0.6, reasoning: 30, cacheCreation: 7.5 }] });
+    expect((await PUT(req("PUT", { body: good }))).status).toBe(200);
+    expect((await repo.getSalePrice(NAME)).tiers).toEqual(good.tiers);
+    const bad = await PUT(req("PUT", { body: usd({ tiers: [{ ...good.tiers[0], output: 29 }] }) }));
+    expect(bad.status).toBe(422);
+    expect(await bad.json()).toMatchObject({ error: "below_floor", field: "output", minimum: 30 });
+  });
+
+  it("PUT refuses malformed tiers with 422 invalid", async () => {
+    const { PUT } = await loadRoute();
+    const res = await PUT(req("PUT", { body: usd({ tiers: [{ above: -1, input: 1 }] }) }));
+    expect(res.status).toBe(422);
+    expect(await res.json()).toMatchObject({ error: "invalid", field: "tiers" });
   });
 });

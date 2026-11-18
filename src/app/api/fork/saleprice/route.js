@@ -10,6 +10,12 @@ const TOKEN_KEYS = ["input", "output", "cached", "reasoning", "cacheCreation"];
 function sanitize(body) {
   const out = { name: body.name, kind: body.kind, unit: "usd" };
   for (const k of [...TOKEN_KEYS, "perImage"]) if (body[k] !== undefined) out[k] = body[k];
+  // Only the known fields of a tier are kept; anything that is not an array of objects is left for validation to refuse.
+  if (body.tiers !== undefined) {
+    out.tiers = Array.isArray(body.tiers)
+      ? body.tiers.map((t) => (t && typeof t === "object" ? Object.fromEntries(["above", ...TOKEN_KEYS].filter((k) => t[k] !== undefined).map((k) => [k, t[k]])) : t))
+      : body.tiers;
+  }
   if (body.source === "markup") {
     out.source = "markup";
     if (typeof body.pct === "number" && Number.isFinite(body.pct)) out.pct = body.pct;

@@ -1,4 +1,5 @@
 import { TOKEN_FIELDS, ceil6, round6 } from "@/lib/pricing/priceUnit.js";
+import { priceForPrompt, tierBreakpoints } from "../../../../../open-sse/utils/priceTiers.js";
 
 /**
  * What a bulk action would do to one row, mirroring the server: markup rounds up and is refused on an active
@@ -10,12 +11,25 @@ export function bulkPreview(row, action, pct) {
   const base = promo ? (row.stored?.restore ?? row.floor) : row.effective;
   if (!base) return null;
   const skip = action === "markup" && promo ? "in_promotion" : null;
-  const next = {};
-  for (const f of TOKEN_FIELDS) {
-    const v = Number(base[f] ?? 0);
-    next[f] = action === "markup" ? ceil6((v * (100 + pct)) / 100) : round6((v * (100 - pct)) / 100);
-  }
-  const under = row.floor ? TOKEN_FIELDS.some((f) => next[f] < Number(row.floor[f] ?? 0)) : false;
+  const scale = (src) => {
+    const out = {};
+    for (const f of TOKEN_FIELDS) {
+      if (!(f in src)) continue;
+      const v = Number(src[f] ?? 0);
+      out[f] = action === "markup" ? ceil6((v * (100 + pct)) / 100) : round6((v * (100 - pct)) / 100);
+    }
+    return out;
+  };
+  const next = scale(base);
+  if (base.tiers?.length) next.tiers = base.tiers.map((t) => ({ above: t.above, ...scale(t) }));
+  // Price and floor are piecewise constant in the prompt size: compare at the first token of every interval.
+  const under = row.floor
+    ? [0, ...tierBreakpoints(row.floor, next).map((b) => b + 1)].some((n) => {
+        const p = priceForPrompt(next, n);
+        const m = priceForPrompt(row.floor, n);
+        return TOKEN_FIELDS.some((f) => Number(p[f] ?? 0) < Number(m[f] ?? 0));
+      })
+    : false;
   return { from: row.effective?.input, to: next.input, under, skip };
 }
 

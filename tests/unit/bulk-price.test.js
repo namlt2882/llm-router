@@ -175,3 +175,23 @@ describe("belowFloor", () => {
     expect(await belowFloor(at(1), ctx(40000))).toBe(false);
   });
 });
+
+describe("applyBulk with tiers", () => {
+  it("a markup scales every tier and still passes the floor", async () => {
+    const tiered = { ...base(1), tiers: [{ above: 100, input: 2, output: 8, cached: 0.2, reasoning: 8, cache_creation: 2.5 }] };
+    const c = { rate: 25000, baseFor: async (n) => (n === "cc/tiered" ? tiered : null), comboModels: async () => null };
+    const s = store();
+    const { results } = await run(s, { action: "markup", names: ["cc/tiered"], pct: 10 }, { c });
+    expect(results[0]).toMatchObject({ ok: true });
+    expect(s.m.get("cc/tiered").tiers).toEqual([{ above: 100, input: 2.2, output: 8.8, cached: 0.22, reasoning: 8.8, cacheCreation: 2.75 }]);
+  });
+
+  it("a promotion scales the tiers down and reports belowFloor against the tier floor", async () => {
+    const tiered = { ...base(1), tiers: [{ above: 100, input: 2, output: 8, cached: 0.2, reasoning: 8, cache_creation: 2.5 }] };
+    const c = { rate: 25000, baseFor: async (n) => (n === "cc/tiered" ? tiered : null), comboModels: async () => null };
+    const s = store();
+    const { results } = await run(s, { action: "promo", names: ["cc/tiered"], pct: 20, endsAt: 5000 }, { c });
+    expect(results[0]).toMatchObject({ ok: true, belowFloor: true });
+    expect(s.m.get("cc/tiered").tiers[0]).toMatchObject({ above: 100, input: 1.6, output: 6.4 });
+  });
+});

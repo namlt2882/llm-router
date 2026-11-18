@@ -3,7 +3,8 @@ import { getPricingForModel } from "@/lib/db/repos/pricingRepo.js";
 import { getComboByName } from "@/lib/db/repos/combosRepo.js";
 import { listSalePrices } from "@/lib/db/repos/salePriceRepo.js";
 import { getPriceDefault } from "@/lib/db/repos/priceDefaultRepo.js";
-import { ceil6, toUsdRow, defaultBase, MAX_USD_PRICE } from "@/lib/pricing/priceUnit.js";
+import { ceil6, toUsdRow, defaultBase, MAX_USD_PRICE, MAX_TIERS, TOKEN_FIELDS } from "@/lib/pricing/priceUnit.js";
+import { priceForPrompt, tierBreakpoints } from "../../../open-sse/utils/priceTiers.js";
 
 // Sale field -> base field (base prices are USD per 1M tokens, snake_case).
 const FIELDS = [
@@ -14,17 +15,40 @@ const FIELDS = [
   ["cacheCreation", "cache_creation"],
 ];
 
+const badTiers = { ok: false, field: "tiers", reason: "invalid" };
+function validateTiers(tiers) {
+  if (tiers === undefined) return null;
+  if (!Array.isArray(tiers) || tiers.length > MAX_TIERS) return badTiers;
+  const seen = new Set();
+  for (const t of tiers) {
+    if (!t || typeof t !== "object" || typeof t.above !== "number" || !Number.isFinite(t.above) || t.above <= 0 || seen.has(t.above)) return badTiers;
+    seen.add(t.above);
+    for (const f of TOKEN_FIELDS) {
+      if (t[f] === undefined) continue;
+      if (typeof t[f] !== "number" || !Number.isFinite(t[f]) || t[f] < 0) return badTiers;
+      if (t[f] > MAX_USD_PRICE) return { ok: false, field: "tiers", reason: "too_high", maximum: MAX_USD_PRICE };
+    }
+  }
+  return null;
+}
+
 const unsellable = (name) => ({ ok: false, field: "name", reason: "unsellable", name });
 
 // A name's base as USD per 1M tokens: a model's own base, a combo's per-field average of its members
 // (a nested combo is one member at its own average, a duplicated member counts each time).
 // open-sse/providers/pricing.js charges a missing (or zero) cached / cache-write rate at input and reasoning at output.
-const withCostFallbacks = (b) => ({
+const fallbacks = (b) => ({
   ...b,
   cached: b.cached || b.input,
   reasoning: b.reasoning || b.output,
   cache_creation: b.cache_creation || b.input,
 });
+// Every tier is read as the flat rate of a long prompt: it inherits what it leaves out from the base row, then the same fallbacks.
+const withCostFallbacks = ({ tiers, ...flat }) => {
+  const out = fallbacks(flat);
+  if (Array.isArray(tiers) && tiers.length) out.tiers = tiers.map(({ above, ...rates }) => ({ above, ...fallbacks({ ...flat, ...rates }) }));
+  return out;
+};
 
 async function unitBase(name, ctx, seen = new Set()) {
   const members = await ctx.comboModels(name);
@@ -41,10 +65,17 @@ async function unitBase(name, ctx, seen = new Set()) {
     if (!r) return null;
     parts.push(r);
   }
-  const base = {};
-  for (const [, baseField] of FIELDS) {
-    base[baseField] = parts.reduce((sum, p) => sum + Number(p.base[baseField] ?? 0), 0) / parts.length;
-  }
+  const averageAt = (n) => {
+    const out = {};
+    for (const [, baseField] of FIELDS) {
+      out[baseField] = parts.reduce((sum, p) => sum + Number(priceForPrompt(p.base, n)[baseField] ?? 0), 0) / parts.length;
+    }
+    return out;
+  };
+  const base = averageAt(0);
+  // A combo is sold at the average of its members, and a member steps up where its own tiers do.
+  const breaks = tierBreakpoints(...parts.map((p) => p.base));
+  if (breaks.length) base.tiers = breaks.map((above) => ({ above, ...averageAt(above + 1) }));
   return { base, defaulted: parts.some((p) => p.defaulted) };
 }
 
@@ -56,6 +87,13 @@ export async function costFloor(name, kind, ctx) {
   if (!r) return { error: unsellable(name) };
   const floor = {};
   for (const [field, baseField] of FIELDS) floor[field] = ceil6(Number(r.base[baseField] ?? 0));
+  if (r.base.tiers?.length) {
+    floor.tiers = r.base.tiers.map((t) => {
+      const out = { above: t.above };
+      for (const [field, baseField] of FIELDS) out[field] = ceil6(Number(t[baseField] ?? 0));
+      return out;
+    });
+  }
   return { floor, defaulted: r.defaulted };
 }
 
@@ -73,11 +111,18 @@ export async function validateSalePrice(entry, ctx) {
     return { ok: false, field: "perImage", reason: "invalid" };
   }
   if (entry.perImage > MAX_USD_PRICE) return { ok: false, field: "perImage", reason: "too_high", maximum: MAX_USD_PRICE };
+  const tiersBad = validateTiers(entry.tiers);
+  if (tiersBad) return tiersBad;
   const { floor, error } = await costFloor(entry.name, entry.kind, ctx);
   if (error) return error;
-  for (const [field] of FIELDS) {
-    // Exact compare: a price at the floor passes, one unit below fails.
-    if (entry[field] < floor[field]) return { ok: false, field, minimum: floor[field] };
+  // A price is piecewise constant in the prompt size, so checking each interval's first token covers all of it.
+  for (const n of [0, ...tierBreakpoints(floor, entry).map((b) => b + 1)]) {
+    const sale = priceForPrompt(entry, n);
+    const min = priceForPrompt(floor, n);
+    for (const [field] of FIELDS) {
+      // Exact compare: a price at the floor passes, one unit below fails.
+      if (sale[field] < min[field]) return { ok: false, field, minimum: min[field] };
+    }
   }
   return { ok: true };
 }

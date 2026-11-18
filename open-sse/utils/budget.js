@@ -3,6 +3,7 @@
 // clamp max tokens, cut the stream at the budget, report the cost.
 // Sale prices are credits per 1M tokens; a call's cost is rounded UP to whole credits.
 import { canonicalizeUsage, BUFFER_TOKENS } from "./usageTracking.js";
+import { priceForPrompt, priceForReserve } from "./priceTiers.js";
 
 export const BUDGET_HEADER = "x-wavebot-budget-credits";
 export const HOLD_HEADER = "x-wavebot-hold-id";
@@ -55,9 +56,11 @@ function normalizeUsage(usage) {
   return canon;
 }
 
-function rawCost(usage, sale) {
+// A request whose prompt crosses a tier threshold bills every token at that tier (see priceForPrompt).
+function rawCost(usage, saleRow) {
   const u = normalizeUsage(usage);
   if (!u) return 0;
+  const sale = priceForPrompt(saleRow, u.prompt_tokens || 0);
   const cached = u.cached_tokens || 0;
   const created = u.cache_creation_input_tokens || 0;
   const reasoning = Math.min(u.reasoning_tokens || 0, u.completion_tokens || 0);
@@ -78,7 +81,8 @@ export function actualCostCredits(usage, sale) {
   return roundUp(rawCost(usage, sale));
 }
 
-export function maxTokensForBudget(credits, sale, inputTokens, reasoningAllowance) {
+export function maxTokensForBudget(credits, saleRow, inputTokens, reasoningAllowance) {
+  const sale = priceForReserve(saleRow, inputTokens);
   const remaining = credits
     - (inputTokens * (sale.input ?? 0)) / PER_MILLION
     - (reasoningAllowance * (sale.reasoning ?? sale.output ?? 0)) / PER_MILLION;
@@ -226,12 +230,16 @@ export function budgetRefusalResponse(r) {
 /** Running-cost tracker. onChunk takes cumulative counts and says whether the budget is reached. */
 export function createBudgetCut({ budgetCredits, sale, inputTokens }) {
   let last = { prompt_tokens: inputTokens || 0, completion_tokens: 0 };
+  // Until the provider reports a prompt count, only the estimate is known, so price it at the reserve tier.
+  let reported = false;
+  const priced = () => rawCost(last, reported ? sale : priceForReserve(sale, inputTokens || 0));
   return {
     onChunk(counts) {
+      reported = counts?.prompt_tokens != null;
       last = { prompt_tokens: inputTokens || 0, completion_tokens: 0, ...counts };
-      return rawCost(last, sale) >= budgetCredits ? "cut" : "continue";
+      return priced() >= budgetCredits ? "cut" : "continue";
     },
-    cost: () => roundUp(rawCost(last, sale)),
+    cost: () => roundUp(priced()),
   };
 }
 

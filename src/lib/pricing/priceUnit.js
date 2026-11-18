@@ -1,4 +1,6 @@
 export const TOKEN_FIELDS = ["input", "output", "cached", "reasoning", "cacheCreation"];
+/** At most this many context tiers per price row. */
+export const MAX_TIERS = 8;
 export const FIELDS = [...TOKEN_FIELDS, "perImage"];
 export const DEFAULT_BASE_SETTING = { enabled: false, input: 0.05, cached: 0.005, output: 0.1 };
 
@@ -11,12 +13,20 @@ const NOISE = 1e-12;
 export const ceil6 = (x) => Math.ceil(x * 1e6 * (1 - NOISE)) / 1e6;
 export const round6 = (x) => Math.round(x * 1e6) / 1e6;
 
+// A tier keeps its `above` threshold (a token count) and converts every price field.
+const mapTier = (t, fn) => {
+  const out = { above: t.above };
+  for (const f of TOKEN_FIELDS) if (f in t) out[f] = fn(t[f]);
+  return out;
+};
+
 /** A stored row as USD per 1M tokens. A row without `unit: "usd"` is a legacy credit row and is converted at `rate`. */
 export function toUsdRow(row, rate) {
   if (!row) return null;
   if (row.unit === "usd") return row;
   const out = { ...row, unit: "usd" };
   for (const f of FIELDS) if (f in row) out[f] = ceil6(Number(row[f]) / rate);
+  if (Array.isArray(row.tiers)) out.tiers = row.tiers.map((t) => mapTier(t, (v) => ceil6(Number(v) / rate)));
   if ("restore" in row) out.restore = toUsdRow(row.restore, rate);
   return out;
 }
@@ -26,6 +36,7 @@ export function toCredits(usdRow, rate) {
   const { unit, restore, ...rest } = usdRow;
   const out = { ...rest };
   for (const f of FIELDS) if (f in usdRow) out[f] = round6(Number(usdRow[f]) * rate);
+  if (Array.isArray(usdRow.tiers)) out.tiers = usdRow.tiers.map((t) => mapTier(t, (v) => round6(Number(v) * rate)));
   return out;
 }
 
