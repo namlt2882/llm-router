@@ -62,3 +62,22 @@ describe("context tiers in the pricing page", () => {
     expect(tiersForSave([])).toBeUndefined();
   });
 });
+
+import { scheduleLabel, calendarStaleNotice } from "@/app/(dashboard)/dashboard/pricing/formatPrice.js";
+
+describe("peak / off-peak caption", () => {
+  it("names the band now and when it changes", () => {
+    expect(scheduleLabel({ id: "deepseek", band: "peak", nextChangeAt: Date.UTC(2026, 10, 18, 4), calendarStale: false })).toBe("Peak now · off-peak from 2026-11-18 04:00 UTC");
+    expect(scheduleLabel({ id: "deepseek", band: "offpeak", nextChangeAt: Date.UTC(2026, 10, 23, 1), calendarStale: false })).toBe("Off-peak now · peak from 2026-11-23 01:00 UTC");
+  });
+
+  it("drops the change time when none is known", () => {
+    expect(scheduleLabel({ id: "deepseek", band: "offpeak", nextChangeAt: null })).toBe("Off-peak now");
+    expect(scheduleLabel({ id: "deepseek", band: "peak", nextChangeAt: null })).toBe("Peak now");
+  });
+
+  it("warns once about the holiday calendar only when a row is stale", () => {
+    expect(calendarStaleNotice([{}, { schedule: { calendarStale: true } }])).toBe("Chinese holiday calendar is ending: add the next year's dates in open-sse/utils/priceSchedule.js");
+    expect(calendarStaleNotice([{}])).toBeNull();
+  });
+});

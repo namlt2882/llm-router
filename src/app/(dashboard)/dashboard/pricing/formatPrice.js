@@ -41,3 +41,18 @@ export function tiersForSave(edit) {
   if (!edit?.length) return undefined;
   return edit.map((t) => ({ above: Number(t.above), ...Object.fromEntries(TIER_KEYS.filter((k) => t[k] !== undefined && t[k] !== "").map((k) => [k, Number(t[k])])) }));
 }
+
+const utcMinute = (ms) => `${new Date(ms).toISOString().slice(0, 16).replace("T", " ")} UTC`;
+
+/** "Peak now · off-peak from <UTC time>" for a price-list row's schedule; no change time when none is known. */
+export function scheduleLabel(schedule) {
+  const peak = schedule?.band !== "offpeak";
+  const now = peak ? "Peak now" : "Off-peak now";
+  if (schedule?.nextChangeAt == null) return now;
+  return `${now} · ${peak ? "off-peak" : "peak"} from ${utcMinute(schedule.nextChangeAt)}`;
+}
+
+export const calendarStaleNotice = (rows) =>
+  (rows ?? []).some((r) => r.schedule?.calendarStale)
+    ? "Chinese holiday calendar is ending: add the next year's dates in open-sse/utils/priceSchedule.js"
+    : null;

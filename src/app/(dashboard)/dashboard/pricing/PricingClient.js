@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Badge, Button, Card, Input, Select } from "@/shared/components";
 import { filterRows } from "./filterRows.js";
-import { editTiersFrom, fmtTokens, fmtUsd, parseDefaultBase, showPrice, tierLines, tiersForSave } from "./formatPrice.js";
+import { calendarStaleNotice, editTiersFrom, fmtTokens, fmtUsd, parseDefaultBase, scheduleLabel, showPrice, tierLines, tiersForSave } from "./formatPrice.js";
 import { bulkPreview, selectedVisible } from "./bulkPreview.js";
 
 const FIELDS = [
@@ -211,6 +211,10 @@ export default function PricingClient() {
         )}
       </Card>
 
+      {calendarStaleNotice(rows) && (
+        <Card title="Holiday calendar" subtitle={calendarStaleNotice(rows)} icon="warning" />
+      )}
+
       {flagged.length > 0 && (
         <Card title="Below the current floor" subtitle="A rate or base-price change put these under cost. They are not rewritten; raise them." icon="warning">
           <ul className="flex flex-col gap-1 text-sm" data-testid="flagged-list">
@@ -403,7 +407,10 @@ function PriceRow({ row, mode, rate, checked, flagged, error, onToggle, onSave, 
         <td className="py-1 pr-3">
           <input type="checkbox" aria-label={`Select ${row.name}`} checked={checked && !locked} disabled={locked} onChange={onToggle} />
         </td>
-        <td className="py-1 pr-3 font-mono">{row.name}</td>
+        <td className="py-1 pr-3 font-mono">
+          {row.name}
+          {row.schedule && <div className="text-xs font-sans text-text-muted" data-testid="schedule-caption">{scheduleLabel(row.schedule)}</div>}
+        </td>
         <td className="py-1 pr-3">{row.kind}</td>
         <td className="py-1 pr-3 whitespace-nowrap">
           {row.floor ? [row.floor.input, row.floor.cached, row.floor.output].map((v) => showPrice(v, mode, rate)).join(" / ") : "-"}
