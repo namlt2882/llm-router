@@ -15,13 +15,15 @@ const FIELDS = [
   ["cacheCreation", "cache_creation"],
 ];
 
+const MAX_TIER_ABOVE = 100_000_000;
 const badTiers = { ok: false, field: "tiers", reason: "invalid" };
 function validateTiers(tiers) {
   if (tiers === undefined) return null;
   if (!Array.isArray(tiers) || tiers.length > MAX_TIERS) return badTiers;
   const seen = new Set();
   for (const t of tiers) {
-    if (!t || typeof t !== "object" || typeof t.above !== "number" || !Number.isFinite(t.above) || t.above <= 0 || seen.has(t.above)) return badTiers;
+    if (!t || typeof t !== "object" || !Number.isInteger(t.above) || t.above <= 0 || t.above > MAX_TIER_ABOVE || seen.has(t.above)) return badTiers;
+    if (Object.keys(t).some((k) => k !== "above" && !TOKEN_FIELDS.includes(k))) return badTiers;
     seen.add(t.above);
     for (const f of TOKEN_FIELDS) {
       if (t[f] === undefined) continue;

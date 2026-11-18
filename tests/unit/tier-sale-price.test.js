@@ -69,6 +69,10 @@ describe("validateSalePrice with tiers", () => {
     ["a duplicate threshold", [{ above: 5, input: 2 }, { above: 5, input: 3 }]],
     ["a negative rate", [{ above: 5, input: -1 }]],
     ["more than 8 tiers", Array.from({ length: 9 }, (_, i) => ({ above: i + 1 }))],
+    ["a fractional threshold", [{ above: 1.5, input: 2 }]],
+    ["a threshold past 100M tokens", [{ above: 100_000_001, input: 2 }]],
+    ["a snake_case cache_creation key (sale rows use cacheCreation)", [{ above: 5, cache_creation: 0 }]],
+    ["an unknown field", [{ above: 5, inptu: 2 }]],
   ])("rejects tiers that are %s", async (_, bad) => {
     expect(await validateSalePrice(flatRow({ tiers: bad }), ctx)).toMatchObject({ ok: false, field: "tiers", reason: "invalid" });
   });
