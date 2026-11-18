@@ -70,7 +70,7 @@ export async function applyBulk(
     const current = resolveStored(raw, now);
     const promoActive = action === "promo" && isActivePromo(raw, now);
     const prior = promoActive ? (raw.restore ?? null) : current;
-    const base = prior ?? (await effectiveUsdPrice(name, { stored: async () => null, ctx, now }));
+    const base = prior ?? (await effectiveUsdPrice(name, { stored: async () => null, ctx, now, at: null }));
     if (!base) return { name, ok: false, error: "unsellable" };
 
     const core = { name, kind: base.kind, unit: "usd" };

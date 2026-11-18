@@ -206,3 +206,34 @@ describe("POST /api/fork/quote with context tiers", () => {
     expect(long.sale.tiers).toEqual([{ above: 100_000, input: 50_000, output: 200_000, cached: 5_000, reasoning: 200_000, cacheCreation: 62_500 }]);
   });
 });
+
+describe("POST /api/fork/quote and the band", () => {
+  beforeEach(() => {
+    dropAdapter();
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "9router-fork-quote-band-"));
+    process.env.DATA_DIR = tempDir;
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    dropAdapter();
+    vi.unstubAllEnvs();
+    vi.doUnmock("@/lib/fx/fxRate.js");
+    if (originalDataDir === undefined) delete process.env.DATA_DIR;
+    else process.env.DATA_DIR = originalDataDir;
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  it("an auto-priced DeepSeek name reserves the peak figure even when called off-peak", async () => {
+    const out = [];
+    for (const at of [Date.UTC(2026, 10, 18, 2), Date.UTC(2026, 10, 18, 5)]) {
+      const { POST } = await loadRoute();
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(at);
+      const body = await (await POST(post({ model: "deepseek/deepseek-v4-pro", inputTokens: 1_000_000, maxTokens: 0 }))).json();
+      vi.useRealTimers();
+      out.push(body.creditsWorstCase);
+    }
+    expect(out[0]).toBe(out[1]);
+    expect(out[0]).toBeGreaterThan(30000);
+  });
+});

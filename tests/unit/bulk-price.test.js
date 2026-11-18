@@ -195,3 +195,14 @@ describe("applyBulk with tiers", () => {
     expect(s.m.get("cc/tiered").tiers[0]).toMatchObject({ above: 100, input: 1.6, output: 6.4 });
   });
 });
+
+describe("applyBulk is peak-based", () => {
+  it("a markup on an unstored scheduled name stores the peak-based price even while off-peak", async () => {
+    const OFF = Date.UTC(2026, 10, 18, 5);
+    const scheduled = { ...ctx(), baseFor: async (n) => (n === "cc/sched" ? { ...base(10), offPeak: { schedule: "deepseek", factor: 0.5 } } : BASES[n] ?? null) };
+    const s = store();
+    const { results } = await run(s, { action: "markup", names: ["cc/sched"], pct: 0 }, { c: scheduled, now: OFF });
+    expect(results[0]).toMatchObject({ ok: true, belowFloor: false });
+    expect(s.m.get("cc/sched").input).toBe(10);
+  });
+});

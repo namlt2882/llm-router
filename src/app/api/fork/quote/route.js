@@ -38,7 +38,7 @@ export async function POST(request) {
   if (typeof body?.model !== "string" || !body.model || [inputTokens, maxTokens, reasoning, images].includes(null)) {
     return fail(400, "model, inputTokens and maxTokens are required non-negative numbers");
   }
-  const sale = await effectiveSalePrice(body.model);
+  const sale = await effectiveSalePrice(body.model, { at: null });
   if (!sale) return fail(402, "not_sellable");
   let rate;
   try {
@@ -47,7 +47,7 @@ export async function POST(request) {
     return fail(503, "fx_rate_unavailable");
   }
   const promo = sale.source === "promo";
-  const promoUnderFloor = promo ? await belowFloor(await effectiveUsdPrice(body.model), await defaultContext()).catch(() => false) : false;
+  const promoUnderFloor = promo ? await belowFloor(await effectiveUsdPrice(body.model, { at: null }), await defaultContext()).catch(() => false) : false;
   // A long prompt bills every token at its tier, so the worst case is priced at the dearer tier the input size or 1.25x it lands in (the caller only estimates).
   const at = priceForReserve(sale, inputTokens);
   const perMillion = inputTokens * at.input + maxTokens * at.output + reasoning * at.reasoning;

@@ -4,7 +4,7 @@ import { getComboByName } from "@/lib/db/repos/combosRepo.js";
 import { listSalePrices } from "@/lib/db/repos/salePriceRepo.js";
 import { getPriceDefault } from "@/lib/db/repos/priceDefaultRepo.js";
 import { ceil6, toUsdRow, defaultBase, MAX_USD_PRICE, MAX_TIERS, TOKEN_FIELDS } from "@/lib/pricing/priceUnit.js";
-import { priceForPrompt, tierBreakpoints } from "../../../open-sse/utils/priceTiers.js";
+import { priceForPrompt, tierBreakpoints, settleBand } from "../../../open-sse/utils/priceTiers.js";
 
 // Sale field -> base field (base prices are USD per 1M tokens, snake_case).
 const FIELDS = [
@@ -50,17 +50,17 @@ const withCostFallbacks = ({ tiers, ...flat }) => {
   return out;
 };
 
-async function unitBase(name, ctx, seen = new Set()) {
+async function unitBase(name, ctx, seen = new Set(), at) {
   const members = await ctx.comboModels(name);
   if (!members) {
     const b = await ctx.baseFor(name);
-    return b ? { base: withCostFallbacks(b), defaulted: !!b.defaulted } : null;
+    return b ? { base: withCostFallbacks(settleBand(b, at)), defaulted: !!b.defaulted } : null;
   }
   if (seen.has(name)) return "cycle";
   const next = new Set(seen).add(name);
   const parts = [];
   for (const m of members) {
-    const r = await unitBase(m, ctx, next);
+    const r = await unitBase(m, ctx, next, at);
     if (r === "cycle") return "cycle";
     if (!r) return null;
     parts.push(r);
@@ -79,10 +79,13 @@ async function unitBase(name, ctx, seen = new Set()) {
   return { base, defaulted: parts.some((p) => p.defaulted) };
 }
 
-/** Cost floor in USD per 1M tokens (no FX rate): the base, or a combo's average of its members, rounded up to 6 decimals. */
-export async function costFloor(name, kind, ctx) {
+/**
+ * Cost floor in USD per 1M tokens (no FX rate): the base, or a combo's average of its members, rounded up to 6 decimals.
+ * Peak rates unless `at` (ms) is given: only the auto sale price asks for the band, validation and bulk edits never do.
+ */
+export async function costFloor(name, kind, ctx, { at } = {}) {
   if (kind === "combo" && !(await ctx.comboModels(name))) return { error: unsellable(name) };
-  const r = await unitBase(name, ctx);
+  const r = await unitBase(name, ctx, new Set(), at);
   if (r === "cycle") return { error: { ok: false, field: "name", reason: "combo_cycle", name } };
   if (!r) return { error: unsellable(name) };
   const floor = {};
