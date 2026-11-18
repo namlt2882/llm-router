@@ -13,6 +13,8 @@ function dropAdapter() {
   delete global._dbAdapter;
 }
 
+let listBuilder = async () => [{ id: "cc/claude-sonnet-4-6", owned_by: "cc" }, { id: "cc/unknown", owned_by: "cc" }];
+
 async function loadRoute({ fxFails = false } = {}) {
   vi.resetModules();
   vi.stubEnv("WAVEBOT_FORK_ADMIN_TOKEN", "secret-token");
@@ -34,7 +36,7 @@ async function loadRoute({ fxFails = false } = {}) {
   }));
   vi.doMock("@/lib/db/repos/combosRepo.js", () => ({ getComboByName: async () => null }));
   vi.doMock("@/app/api/v1/models/route.js", () => ({
-    buildModelsList: async () => [{ id: "cc/claude-sonnet-4-6", owned_by: "cc" }, { id: "cc/unknown", owned_by: "cc" }],
+    buildModelsList: (...a) => listBuilder(...a),
   }));
   const repo = await import("@/lib/db/repos/salePriceRepo.js");
   const route = await import("@/app/api/fork/pricelist/route.js");
@@ -112,6 +114,32 @@ describe("GET /api/fork/pricelist", () => {
     expect(d.enabled).toBe(true);
     expect(rows.find((r) => r.name === "cc/unknown")).toMatchObject({ status: "auto", defaultBase: true, floor: { input: 0.05, cached: 0.005, output: 0.1 } });
     expect(rows.find((r) => r.name === "cc/claude-sonnet-4-6").defaultBase).toBe(false);
+  });
+
+  it("an expired names cache is served at once while discovery refreshes in the background", async () => {
+    const { GET } = await loadRoute();
+    const t0 = Date.now();
+    const clock = vi.spyOn(Date, "now").mockReturnValue(t0);
+    try {
+      await GET(get());
+      let release;
+      const slow = new Promise((r) => { release = r; });
+      const calls = vi.fn(async () => { await slow; return [{ id: "cc/new-model", owned_by: "cc" }]; });
+      listBuilder = calls;
+      clock.mockReturnValue(t0 + 61_000);
+      const first = await (await GET(get())).json();
+      expect(calls).toHaveBeenCalledTimes(1);
+      expect(first.rows.map((r) => r.name)).toContain("cc/unknown");
+      expect(first.rows.map((r) => r.name)).not.toContain("cc/new-model");
+      release();
+      await new Promise((r) => setTimeout(r, 10));
+      const second = await (await GET(get())).json();
+      expect(second.rows.map((r) => r.name)).toContain("cc/new-model");
+      expect(calls).toHaveBeenCalledTimes(1);
+    } finally {
+      clock.mockRestore();
+      listBuilder = async () => [{ id: "cc/claude-sonnet-4-6", owned_by: "cc" }, { id: "cc/unknown", owned_by: "cc" }];
+    }
   });
 
   it("503 without a floor rate", async () => {

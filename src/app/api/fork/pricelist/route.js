@@ -12,11 +12,30 @@ const NAMES_TTL_MS = 60_000;
 const fail = (status, error) => NextResponse.json({ error }, { status, headers: NO_STORE });
 
 let namesCache = { at: 0, names: [] };
+let refreshing = null;
+
+function refreshNames() {
+  if (!refreshing) {
+    refreshing = buildModelsList(["llm"])
+      .then((list) => {
+        namesCache = { at: Date.now(), names: list.map((m) => m.id) };
+      })
+      .finally(() => {
+        refreshing = null;
+      });
+  }
+  return refreshing;
+}
+
+// Provider model discovery can be slow, so a stale list is served at once and refreshed in the background.
+// Only the very first call (nothing cached yet) waits.
 async function servedNames(now) {
-  if (now - namesCache.at < NAMES_TTL_MS) return namesCache.names;
-  const names = (await buildModelsList(["llm"])).map((m) => m.id);
-  namesCache = { at: now, names };
-  return names;
+  if (namesCache.at === 0) {
+    await refreshNames();
+  } else if (now - namesCache.at >= NAMES_TTL_MS) {
+    refreshNames().catch(() => {});
+  }
+  return namesCache.names;
 }
 
 // Fork patches #30/#31: every served model and combo with its USD floor, stored price, effective price and status.

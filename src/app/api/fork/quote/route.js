@@ -4,15 +4,22 @@ import { effectiveSalePrice, effectiveUsdPrice } from "@/lib/pricing/effectiveSa
 import { defaultContext } from "@/lib/pricing/validateSalePrice.js";
 import { belowFloor } from "@/lib/pricing/bulkPrice.js";
 import { getFloorRate } from "@/lib/fx/fxRate.js";
+import { getSalePrice } from "@/lib/db/repos/salePriceRepo.js";
+import { resolveStored } from "@/lib/pricing/effectiveSalePrice.js";
 
 const NO_STORE = { "Cache-Control": "no-store" };
 const MAX_COUNT = 1e12;
+// A USD or auto price becomes credits at the floor rate, which refreshes every 6 h. A quote held across a refresh could
+// be billed at a slightly higher rate and cut short, so such a quote reserves 1% extra. A legacy credit row does not float.
+const FX_HEADROOM = 1.01;
 const fail = (status, error) => NextResponse.json({ error }, { status, headers: NO_STORE });
 
 const count = (v, { required = false } = {}) => {
   if (v === undefined || v === null) return required ? null : 0;
   return typeof v === "number" && Number.isFinite(v) && v >= 0 && v <= MAX_COUNT ? v : null;
 };
+
+const storedIsUsd = async (name) => resolveStored(await getSalePrice(name), Date.now())?.unit === "usd";
 
 // Fork patch #27: worst-case credits a call can cost, so WaveBot can hold them before the call.
 export async function POST(request) {
@@ -41,12 +48,15 @@ export async function POST(request) {
   const promo = sale.source === "promo";
   const promoUnderFloor = promo ? await belowFloor(await effectiveUsdPrice(body.model), await defaultContext()).catch(() => false) : false;
   const perMillion = inputTokens * sale.input + maxTokens * sale.output + reasoning * sale.reasoning;
-  const creditsWorstCase = Math.ceil(perMillion / 1e6 - 1e-9) + images * (sale.perImage || 0);
+  const floats = sale.auto === true || (await storedIsUsd(body.model));
+  const fxHeadroom = floats ? FX_HEADROOM : 1;
+  const creditsWorstCase = Math.ceil((perMillion / 1e6) * fxHeadroom - 1e-9) + Math.ceil(images * (sale.perImage || 0) * fxHeadroom - 1e-9);
   return NextResponse.json(
     {
       creditsWorstCase,
       sale: { input: sale.input, output: sale.output, cached: sale.cached, reasoning: sale.reasoning, cacheCreation: sale.cacheCreation, perImage: sale.perImage || 0, ...(sale.auto ? { auto: true } : {}), ...(promo ? { endsAt: sale.endsAt, ...(promoUnderFloor ? { belowFloor: true } : {}) } : {}) },
       floorRate: rate,
+      fxHeadroom,
     },
     { headers: NO_STORE },
   );

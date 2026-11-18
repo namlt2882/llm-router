@@ -59,6 +59,7 @@ describe("POST /api/fork/quote", () => {
     const body = await res.json();
     // 100000*1000 + 10000*4000 + 2000*5000 = 150,000,000 / 1e6 = 150
     expect(body.creditsWorstCase).toBe(150);
+    expect(body.fxHeadroom).toBe(1);
     expect(body.sale).toMatchObject({ input: 1000, output: 4000, cached: 100, reasoning: 5000, cacheCreation: 1250 });
     expect(body.floorRate).toBe(25000);
   });
@@ -108,7 +109,9 @@ describe("POST /api/fork/quote", () => {
     const repo = await import("@/lib/db/repos/salePriceRepo.js");
     await repo.setSalePrice({ name: "cc/usd", kind: "model", unit: "usd", input: 1.2, output: 4.8, cached: 0.12, reasoning: 4.8, cacheCreation: 1.5, perImage: 0 });
     const body = await (await POST(post({ model: "cc/usd", inputTokens: 1000, maxTokens: 1000 }))).json();
-    expect(body.creditsWorstCase).toBe(150);
+    // 150 credits at the current rate + 1% headroom for a rate refresh before billing = ceil(151.5)
+    expect(body.creditsWorstCase).toBe(152);
+    expect(body.fxHeadroom).toBe(1.01);
     expect(body.sale).toMatchObject({ input: 30000, output: 120000, cached: 3000 });
     expect(body.sale.unit).toBeUndefined();
   });
@@ -159,7 +162,8 @@ describe("POST /api/fork/quote", () => {
     expect(res.status).toBe(200);
     const body = await res.json();
     // base input $3 per 1M x rate 25000
-    expect(body.creditsWorstCase).toBe(75_000);
+    expect(body.creditsWorstCase).toBe(75_750);
+    expect(body.fxHeadroom).toBe(1.01);
     expect(body.sale).toMatchObject({ input: 75_000, output: 375_000, auto: true });
   });
 
