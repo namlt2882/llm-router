@@ -3,6 +3,8 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Badge, Button, Card, Input, Select } from "@/shared/components";
 import { filterRows } from "./filterRows.js";
+import { fmtUsd, showPrice } from "./formatPrice.js";
+import { ceil6, round6 } from "@/lib/pricing/priceUnit.js";
 
 const FIELDS = [
   ["input", "Input"],
@@ -32,7 +34,7 @@ const endOfDay = (yyyyMmDd) => new Date(`${yyyyMmDd}T23:59:59.999`).getTime();
 
 function explain(err) {
   if (!err) return "";
-  if (err.error === "below_floor") return `${err.field} must be at least ${fmt(err.minimum)} credits per 1M tokens`;
+  if (err.error === "below_floor") return `${err.field} must be at least $${fmtUsd(err.minimum)} per 1M tokens`;
   if (err.error === "unsellable") return "No base price for this name, so it cannot be sold";
   if (err.error === "kind_mismatch") return "Kind does not match: a combo name needs kind combo, a model needs kind model";
   if (err.error === "combo_cycle") return "This combo contains itself";
@@ -49,11 +51,11 @@ async function call(url, options) {
   return { ok: res.ok, status: res.status, data };
 }
 
-// What a bulk action would write for the first price field, mirroring the server (markup rounds up, promo rounds).
+// What a bulk action would write for the first price field in USD, mirroring the server (markup ceil6, promo round6).
 function previewOf(row, action, pct) {
   const base = row.status === "promo" ? (row.stored.restore ?? row.floor) : row.effective;
   if (!base || !Number.isFinite(pct) || pct <= 0) return null;
-  const next = action === "markup" ? Math.ceil((base.input * (100 + pct)) / 100 - 1e-9) : Math.round((base.input * (100 - pct)) / 100);
+  const next = action === "markup" ? ceil6((base.input * (100 + pct)) / 100) : round6((base.input * (100 - pct)) / 100);
   return { from: row.effective?.input, to: next, under: row.floor ? next < row.floor.input : false };
 }
 
@@ -72,12 +74,16 @@ export default function PricingClient() {
   const [bulk, setBulk] = useState({ action: "markup", pct: "", endsOn: "", label: "" });
   const [bulkMsg, setBulkMsg] = useState({ error: "", failures: [], applied: 0, belowFloor: 0 });
   const [busy, setBusy] = useState(false);
+  const [mode, setMode] = useState("usd");
+  const [baseDefault, setBaseDefault] = useState({ enabled: false, input: 0.05, cached: 0.005, output: 0.1 });
+  const [defaultMsg, setDefaultMsg] = useState("");
   const [today] = useState(() => new Date().toLocaleDateString("en-CA"));
 
   const load = useCallback(async () => {
     const [l, p, f] = await Promise.all([call("/api/fork/pricelist"), call("/api/fork/saleprice"), call("/api/fork/fx")]);
     if (l.ok) {
       setRows(l.data.rows || []);
+      if (l.data.default) setBaseDefault(l.data.default);
       setLoadError("");
     } else {
       setLoadError(l.status === 503 ? "No FX rate available yet, so prices cannot be shown" : `Could not load prices (${l.status})`);
@@ -113,7 +119,7 @@ export default function PricingClient() {
     });
 
   async function saveRow(row, edit) {
-    const entry = { name: row.name, kind: row.kind };
+    const entry = { name: row.name, kind: row.kind, unit: "usd" };
     for (const [k] of FIELDS) {
       if (edit[k] === "" || edit[k] === undefined) {
         if (k === "perImage") continue;
@@ -157,6 +163,14 @@ export default function PricingClient() {
       belowFloor: results.filter((x) => x.ok && x.belowFloor).length,
     });
     setSelected(new Set(results.filter((x) => !x.ok).map((x) => x.name)));
+    await load();
+  }
+
+  async function saveDefault() {
+    const body = { enabled: !!baseDefault.enabled, input: Number(baseDefault.input), cached: Number(baseDefault.cached), output: Number(baseDefault.output) };
+    const r = await call("/api/fork/pricedefault", { method: "PUT", body: JSON.stringify(body) });
+    if (!r.ok) return setDefaultMsg(r.data?.error || `Request failed (${r.status})`);
+    setDefaultMsg("Saved");
     await load();
   }
 
@@ -213,11 +227,48 @@ export default function PricingClient() {
         </Card>
       )}
 
+      <Card title="Default base price" subtitle="USD per 1M tokens, sold for names that have no base pricing" icon="price_change">
+        <div className="flex flex-col gap-3" data-testid="default-base">
+          <label className="flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              aria-label="Enable default base price"
+              checked={!!baseDefault.enabled}
+              onChange={(e) => setBaseDefault({ ...baseDefault, enabled: e.target.checked })}
+            />
+            Enabled
+          </label>
+          <div className="flex flex-wrap items-end gap-3">
+            {[["input", "Input (USD)"], ["cached", "Cached (USD)"], ["output", "Output (USD)"]].map(([k, label]) => (
+              <Input
+                key={k}
+                label={label}
+                type="number"
+                value={baseDefault[k] ?? ""}
+                onChange={(e) => setBaseDefault({ ...baseDefault, [k]: e.target.value })}
+                className="w-40"
+              />
+            ))}
+            <Button onClick={saveDefault}>Save</Button>
+            {defaultMsg && <span className="pb-2 text-xs text-text-muted">{defaultMsg}</span>}
+          </div>
+          <p className="text-xs text-text-muted">
+            Applies only to names with no base pricing; a name with a real base price, even a free one, is never touched. Reasoning follows output and cache write follows input. A combo averages its members, so one member on the default base moves the whole combo.
+          </p>
+        </div>
+      </Card>
+
       <Card title="Prices" subtitle="Every model and combo. Unpriced names sell at the cost floor; change prices only when you want to." icon="sell">
         {loadError && <p className="mb-3 text-sm text-red-500">{loadError}</p>}
         <div className="mb-3 flex flex-wrap items-end gap-3">
           <Input label="Search" value={q} onChange={(e) => setQ(e.target.value)} placeholder="name contains..." className="w-64" />
           <Select label="Show" value={filter} onChange={(e) => setFilter(e.target.value)} options={FILTERS} />
+          <Select
+            label="Currency"
+            value={mode}
+            onChange={(e) => setMode(e.target.value)}
+            options={[{ value: "usd", label: "USD per 1M" }, { value: "vnd", label: "VND per 1M" }]}
+          />
           <span className="pb-2 text-xs text-text-muted" data-testid="row-count">{visible.length} of {rows.length} names, {selected.size} selected</span>
         </div>
 
@@ -244,7 +295,7 @@ export default function PricingClient() {
               <ul className="text-xs text-text-muted" data-testid="bulk-preview">
                 {previews.map((p) => (
                   <li key={p.row.name}>
-                    <span className="font-mono">{p.row.name}</span> input {fmt(p.from)} → {fmt(p.to)}
+                    <span className="font-mono">{p.row.name}</span> input {showPrice(p.from, mode, fx?.rate)} → {showPrice(p.to, mode, fx?.rate)}
                     {p.under && <span className="text-red-500"> (under the floor)</span>}
                   </li>
                 ))}
@@ -284,8 +335,8 @@ export default function PricingClient() {
                 </th>
                 <th className="pb-2 pr-3">Name</th>
                 <th className="pb-2 pr-3">Kind</th>
-                <th className="pb-2 pr-3">Floor in / out</th>
-                <th className="pb-2 pr-3">Price in / out</th>
+                <th className="pb-2 pr-3">Floor in / cached / out</th>
+                <th className="pb-2 pr-3">Price in / cached / out</th>
                 <th className="pb-2 pr-3">Status</th>
                 <th />
               </tr>
@@ -295,6 +346,8 @@ export default function PricingClient() {
                 <PriceRow
                   key={row.name}
                   row={row}
+                  mode={mode}
+                  rate={fx?.rate}
                   checked={selected.has(row.name)}
                   flagged={flaggedNames.has(row.name)}
                   error={rowErrors[row.name]}
@@ -323,13 +376,14 @@ function StatusBadges({ row, flagged }) {
       {row.status === "custom" && <Badge variant="primary">custom</Badge>}
       {row.status === "markup" && <Badge variant="primary">markup {row.stored?.pct}%</Badge>}
       {row.status === "promo" && <Badge variant="primary">promo -{row.stored?.pct}% until {fmtDate(row.endsAt)}</Badge>}
+      {row.defaultBase && <Badge variant="default">default base</Badge>}
       {row.status === "no_base_price" && <Badge variant="default">no base price, not sellable</Badge>}
       {(row.belowFloor || flagged) && <Badge variant="error">below cost</Badge>}
     </span>
   );
 }
 
-function PriceRow({ row, checked, flagged, error, onToggle, onSave, onAuto }) {
+function PriceRow({ row, mode, rate, checked, flagged, error, onToggle, onSave, onAuto }) {
   const [open, setOpen] = useState(false);
   const [edit, setEdit] = useState({});
   const locked = row.status === "no_base_price";
@@ -346,8 +400,8 @@ function PriceRow({ row, checked, flagged, error, onToggle, onSave, onAuto }) {
         </td>
         <td className="py-1 pr-3 font-mono">{row.name}</td>
         <td className="py-1 pr-3">{row.kind}</td>
-        <td className="py-1 pr-3 whitespace-nowrap">{row.floor ? `${fmt(row.floor.input)} / ${fmt(row.floor.output)}` : "-"}</td>
-        <td className="py-1 pr-3 whitespace-nowrap">{row.effective ? `${fmt(row.effective.input)} / ${fmt(row.effective.output)}` : "-"}</td>
+        <td className="py-1 pr-3 whitespace-nowrap">{row.floor ? [row.floor.input, row.floor.cached, row.floor.output].map((v) => showPrice(v, mode, rate)).join(" / ") : "-"}</td>
+        <td className="py-1 pr-3 whitespace-nowrap">{row.effective ? [row.effective.input, row.effective.cached, row.effective.output].map((v) => showPrice(v, mode, rate)).join(" / ") : "-"}</td>
         <td className="py-1 pr-3"><StatusBadges row={row} flagged={flagged} /></td>
         <td className="py-1 text-right whitespace-nowrap">
           {!locked && <Button size="sm" variant="ghost" onClick={open ? () => setOpen(false) : startEdit}>{open ? "Close" : "Edit"}</Button>}
@@ -361,7 +415,7 @@ function PriceRow({ row, checked, flagged, error, onToggle, onSave, onAuto }) {
             <div className="flex flex-wrap items-end gap-3">
               {FIELDS.map(([k, label]) => (
                 <label key={k} className="flex flex-col text-xs text-text-muted">
-                  {label}
+                  {k === "perImage" ? label : `${label} (USD)`}
                   <input
                     aria-label={`${row.name} ${k}`}
                     type="number"
