@@ -60,3 +60,40 @@ describe("effectiveSalePrice", () => {
     expect(await effectiveSalePrice("cc/cheap", { stored: async () => stored, ctx: failing })).toBe(stored);
   });
 });
+
+describe("promotion expiry", () => {
+  const cheapRow = { name: "cc/cheap", kind: "model", input: 5, output: 5, cached: 5, reasoning: 5, cacheCreation: 5, perImage: 0 };
+  const restoreRow = { ...cheapRow, input: 7777 };
+  const promo = (over) => ({ ...cheapRow, source: "promo", endsAt: 2000, restore: null, ...over });
+
+  it("an active promotion row is returned untouched", async () => {
+    const { effectiveSalePrice } = await load();
+    const row = promo({});
+    expect(await effectiveSalePrice("cc/cheap", { stored: async () => row, ctx: ctx(), now: 1000 })).toBe(row);
+  });
+
+  it("an expired promotion falls back to its restore row (endsAt is exclusive)", async () => {
+    const { effectiveSalePrice } = await load();
+    const row = promo({ endsAt: 1000, restore: restoreRow });
+    expect(await effectiveSalePrice("cc/cheap", { stored: async () => row, ctx: ctx(), now: 1000 })).toBe(restoreRow);
+  });
+
+  it("an expired promotion with a null restore is sold at the auto price", async () => {
+    const { effectiveSalePrice } = await load();
+    const row = promo({ endsAt: 1000, restore: null });
+    expect(await effectiveSalePrice("cc/cheap", { stored: async () => row, ctx: ctx(25000), now: 1000 })).toMatchObject({ auto: true, input: 25000 });
+  });
+
+  it("an expired promotion resolves to its restore row even when the rate is unavailable", async () => {
+    const { effectiveSalePrice } = await load();
+    const row = promo({ endsAt: 1000, restore: restoreRow });
+    const failing = async () => { throw new Error("no fx"); };
+    expect(await effectiveSalePrice("cc/cheap", { stored: async () => row, ctx: failing, now: 5000 })).toBe(restoreRow);
+  });
+
+  it("resolveStored passes null and non-promo rows through", async () => {
+    const { resolveStored } = await load();
+    expect(resolveStored(null, 1)).toBeNull();
+    expect(resolveStored(cheapRow, 1e15)).toBe(cheapRow);
+  });
+});
