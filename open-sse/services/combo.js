@@ -469,6 +469,7 @@ export async function handleComboChat({
   let earliestRetryAfter = null;
   let lastStatus = null;
   let requestScopedResult = null;
+  let rejectedAny = false;
 
   for (let i = 0; i < rotatedModels.length; i++) {
     const modelStr = rotatedModels[i];
@@ -523,6 +524,7 @@ export async function handleComboChat({
               // that clause would downgrade an earlier zero-content 200 to 502.
               if (emptySeat) lastStatus = 200;
               else if (lastStatus !== 200) lastStatus = 502;
+              rejectedAny = rejectedAny || rejectedSeat;
               continue;
             }
           }
@@ -646,7 +648,11 @@ export async function handleComboChat({
   // the request itself is invalid, but here the providers are simply unavailable
   // or have no active credentials. 503 is more accurate and retryable by clients.
   const allDisabled = lastError && lastError.toLowerCase().includes("no credentials");
-  const status = allDisabled ? 503 : (lastStatus || 503);
+  // The tail is reached only when nothing was returned, so a 200 here always
+  // means abandonment — and after a rejected seat it is a 200 carrying an
+  // error body, unreadable for a client that only checks the status. A
+  // rejected member's response must not ride the zero-content 200 rule.
+  const status = allDisabled ? 503 : (rejectedAny && lastStatus === 200 ? 502 : (lastStatus || 503));
   const msg = lastError || "All combo models unavailable";
 
   if (earliestRetryAfter) {

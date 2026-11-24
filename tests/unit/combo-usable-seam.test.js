@@ -41,6 +41,24 @@ describe("handleComboChat isUsable", () => {
     });
     expect(res.status).toBe(200);
   });
+  it("never returns a 200 tail after any member was rejected — mixed zero-content + rejected history", async () => {
+    // Seat 1 hits the zero-content arm (lastStatus := 200); seat 2 is rejected by
+    // the predicate, and that arm deliberately keeps an existing 200 untouched so
+    // it never DOWNGRADES an upstream status. The tail then reported lastStatus
+    // 200 with lastError set — a 200 carrying an error body, unreadable for a
+    // client that only checks the status. The tail is only ever reached when
+    // nothing was returned, so a tail 200 is always an abandonment.
+    const calls = [];
+    const res = await handleComboChat({
+      body: {}, models: ["a/1", "b/2"],
+      handleSingleModel: (_b, m) => { calls.push(m); return Promise.resolve(json(m === "a/1" ? { choices: [] } : { answers: {} })); },
+      log, comboName: "c", comboStrategy: "fallback",
+      isUsable: (x) => Object.keys(x?.answers || {}).length > 0,
+    });
+    expect(calls).toEqual(["a/1", "b/2"]);
+    expect(res.status).toBe(502);
+    expect((await res.json()).error).toBeTruthy();
+  });
   it("still applies the zero-content rule when a predicate is present (cumulative, not either/or)", async () => {
     // The predicate accepts everything; only isZeroContentResponse can reject
     // {"choices":[]}. An `if (isUsable) … else if (!isLastModel) …` shape would
