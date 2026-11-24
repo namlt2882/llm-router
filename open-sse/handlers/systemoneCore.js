@@ -1,8 +1,9 @@
 import { createErrorResult, parseUpstreamError, formatProviderError } from "../utils/error.js";
 import { HTTP_STATUS, FETCH_CONNECT_TIMEOUT_MS } from "../config/runtimeConfig.js";
 import { PROVIDER_MEDIA } from "../providers/index.js";
-import { getModelUpstreamId } from "../config/providerModels.js";
+import { getModelUpstreamId, getModelType, PROVIDER_ID_TO_ALIAS } from "../config/providerModels.js";
 import { generateSessionId } from "../executors/opencode-zen.js";
+import { handleSystemoneShim } from "./systemoneShim.js";
 
 const OPENCODE_PROVIDERS = new Set(["opencode", "opencode-zen"]);
 
@@ -24,6 +25,26 @@ export function buildSystemoneUrl(override, cfg) {
 }
 
 /**
+ * resolveSystemoneMode treats `systemoneConfig` as ENDPOINT-LEVEL: any provider
+ * that declares it serves EVERY model natively and never reaches the shim.
+ * Adding a single-model `systemoneConfig` would flip that provider's chat
+ * models off the shim path — this sentence is the warning; the registry
+ * template does not mention the key.
+ *
+ * "native" iff the model row itself is kind "systemone" (via the provider's
+ * ALIAS — PROVIDER_MODELS is keyed `entry.alias || entry.id`) or the provider
+ * declares a systemoneConfig endpoint; "shim" otherwise (a text model asked
+ * through the validated JSON shim).
+ * @returns {"native" | "shim"}
+ */
+export function resolveSystemoneMode({ provider, model }) {
+  const alias = PROVIDER_ID_TO_ALIAS[provider] || provider;
+  if (getModelType(alias, model) === "systemone") return "native";
+  if (PROVIDER_MEDIA[provider]?.systemoneConfig) return "native";
+  return "shim";
+}
+
+/**
  * Core System One (Jev) handler — native decision payload pass-through.
  * URL/headers come from the registry's systemoneConfig; body and JSON response
  * are forwarded untouched (decision models have no chat translation layer).
@@ -38,12 +59,20 @@ export async function handleSystemoneCore({
   onRequestSuccess,
 }) {
   const { provider, model } = modelInfo;
+  // A member without a native protocol speaker (plain text model) answers
+  // through the validated JSON shim instead of refusing.
+  if (resolveSystemoneMode({ provider, model }) === "shim") {
+    return handleSystemoneShim({ body, modelInfo, credentials, log });
+  }
   const cfg = PROVIDER_MEDIA[provider]?.systemoneConfig;
   let targetUrl = buildSystemoneUrl(credentials?.providerSpecificData?.baseUrl, cfg);
   if (!targetUrl) {
+    // resolveSystemoneMode already routed every provider without a
+    // systemoneConfig endpoint to the shim; reaching this guard means a
+    // registry row is kind "systemone" while its provider declares no endpoint.
     return createErrorResult(
       HTTP_STATUS.BAD_REQUEST,
-      `Provider '${provider}' does not support System One.`
+      `Provider '${provider}' declares no System One endpoint.`
     );
   }
   // Cloudflare-style endpoints embed the account and model in the path.
