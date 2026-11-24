@@ -10,7 +10,11 @@ import { AI_PROVIDERS, resolveProviderId } from "@/shared/constants/providers.js
 import { handleSearchCore } from "open-sse/handlers/search/index.js";
 import { errorResponse, unavailableResponse } from "open-sse/utils/error.js";
 import { HTTP_STATUS } from "open-sse/config/runtimeConfig.js";
-import { releaseAccountSlot } from "../services/accountInflight.js";
+import { releaseAccountSlot, parsePriority } from "../services/accountInflight.js";
+import { orderFanoutAttempt } from "../services/fanoutModels.js";
+import { fanoutCtxForEntry } from "../services/fanoutBudget.js";
+import { resolveSessionIdentity } from "open-sse/utils/sessionManager.js";
+import { getModelInfo } from "../services/model.js";
 import * as log from "../utils/logger.js";
 import { updateProviderCredentials, checkAndRefreshToken } from "../services/tokenRefresh.js";
 import { handleComboChat, getComboModelsFromData } from "open-sse/services/combo.js";
@@ -82,22 +86,32 @@ export async function handleSearch(request) {
     const comboStrategies = settings.comboStrategies || {};
     const comboStrategy = comboStrategies[providerInput]?.fallbackStrategy || settings.comboStrategy || "fallback";
     const comboStickyLimit = settings.comboStickyRoundRobinLimit;
-    log.info("SEARCH", `Combo "${providerInput}" with ${comboModels.length} providers (strategy: ${comboStrategy}, sticky: ${comboStickyLimit})`);
+    // Fanout identity, computed once per request — same normalization as the
+    // image handler: `resolveSessionIdentity` needs a PLAIN headers object.
+    const sessionId = resolveSessionIdentity({ headers: Object.fromEntries(request.headers.entries()), body })?.sessionId || null;
+    const priority = parsePriority(request.headers);
+    const fanoutCfg = fanoutCtxForEntry(settings.comboStrategies?.[providerInput]);
+    const { models: ordered, attemptOrdered } = await orderFanoutAttempt({
+      models: comboModels, comboName: providerInput, sessionId, fanoutCtx: fanoutCfg, getModelInfo,
+      attempt: (b, m) => handleSingleProviderSearch(b, m, request, apiKey, settings, { fanout: fanoutCfg, sessionId, priority, wait: true }),
+    });
+    log.info("SEARCH", `Combo "${providerInput}" with ${ordered.length} providers (strategy: ${comboStrategy}, sticky: ${comboStickyLimit})`);
     return handleComboChat({
       body,
-      models: comboModels,
-      handleSingleModel: (b, m) => handleSingleProviderSearch(b, m, request, apiKey, settings),
+      models: ordered,
+      handleSingleModel: attemptOrdered,
       log,
       comboName: providerInput,
       comboStrategy,
-      comboStickyLimit
+      comboStickyLimit,
+      sessionId
     });
   }
 
   return handleSingleProviderSearch(body, providerInput, request, apiKey, settings);
 }
 
-async function handleSingleProviderSearch(body, providerInput, request, apiKey, settings) {
+async function handleSingleProviderSearch(body, providerInput, request, apiKey, settings, selection = null) {
   const query = body.query;
   const providerId = resolveProviderId(providerInput);
   const resolvedProvider = AI_PROVIDERS[providerId];
@@ -171,12 +185,12 @@ async function handleSingleProviderSearch(body, providerInput, request, apiKey, 
     // Provider that actually owns the connection in use — differs from
     // providerId once we fall back, and error locks must be attributed to it.
     let credentialProviderId = providerId;
-    let credentials = await getProviderCredentials(providerId, excludeConnectionIds, searchLockKey);
+    let credentials = await getProviderCredentials(providerId, excludeConnectionIds, searchLockKey, selection || undefined);
 
     // Fall back to the related chat provider's credentials when this search
     // provider has none of its own (one key, chat + search).
     if (!credentials && fallbackProviderId) {
-      credentials = await getProviderCredentials(fallbackProviderId, excludeConnectionIds, searchLockKey);
+      credentials = await getProviderCredentials(fallbackProviderId, excludeConnectionIds, searchLockKey, selection || undefined);
       if (credentials) {
         credentialProviderId = fallbackProviderId;
         log.info("AUTH", `\x1b[32m${providerId} reusing ${fallbackProviderId} credentials\x1b[0m`);
