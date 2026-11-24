@@ -43,6 +43,11 @@ async function sourceImage(body) {
 }
 
 export default {
+  // Every `org/model` id can be an image model here — the registry rows are
+  // only the inference-API catalogue, and a self-hosted TGI/TEI endpoint takes
+  // ANY repo id. The capability gate must not 400 an unlisted id before the
+  // executor's own router-mapping check runs.
+  acceptsImageModel: () => true,
   buildUrl: (model, creds) => {
     const override = customBaseUrl(creds);
     if (override) {

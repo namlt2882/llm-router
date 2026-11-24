@@ -198,5 +198,10 @@ describe("imageCapability packaging", () => {
     // codex grammar: core (no adapter graph) refuses, server wrapper admits
     expect(core.isImageCapable("codex", "gpt-5.6-sol-image")).toBe(false);
     expect(server.isImageCapable("codex", "gpt-5.6-sol-image")).toBe(true);
+    // huggingface is the other open-ended id space: registry rows are only the
+    // inference-API catalogue, a self-hosted TGI endpoint takes ANY repo id.
+    // Found by the Task-10 regression gate (huggingface-image-end-to-end).
+    expect(server.isImageCapable("huggingface", "my-org/my-tgi-model")).toBe(true);
+    expect(server.isImageCapable("huggingface", "some-org/unmapped-model")).toBe(true);
   });
 });
