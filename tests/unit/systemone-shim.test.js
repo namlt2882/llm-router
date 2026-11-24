@@ -12,6 +12,19 @@ describe("parseSystemoneJson", () => {
   it("strips a fence", () => expect(parseSystemoneJson('```json\n{"answers":{}}\n```')).toEqual({ answers: {} }));
   it("takes the outermost object from chatter", () => expect(parseSystemoneJson('sure: {"a":1} done')).toEqual({ a: 1 }));
   it("returns null on prose", () => expect(parseSystemoneJson("I cannot answer")).toBeNull());
+  it("rescans past an unparseable brace pair instead of giving up", () => {
+    // A leading brace pair whose interior is not JSON (e.g. prose that happens
+    // to open with a curly bracket) must not abort the scan: the model's real
+    // answer frequently follows it. Today the first JSON.parse failure returns
+    // null even though a perfectly good object comes after.
+    expect(parseSystemoneJson('Note {important}: {"answers":{}}')).toEqual({ answers: {} });
+  });
+  it("still gives up when no parseable object exists anywhere", () => {
+    // Both pairs are balanced but neither is valid JSON (bare tokens, no quotes).
+    expect(parseSystemoneJson('{broken: [} {still: not json}')).toBeNull();
+    // Unbalanced: a brace opens and never closes.
+    expect(parseSystemoneJson('{"answers": {"a": {"noul": 0.5}')).toBeNull();
+  });
 });
 
 describe("validateSystemoneAnswers", () => {

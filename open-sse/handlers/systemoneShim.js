@@ -38,40 +38,45 @@ Each entry of "answers" is keyed by the question name and must match the questio
 
 /**
  * Pull a JSON object out of a model reply: strip one leading ```json / trailing
- * ``` fence, else take the outermost balanced {…}. Null when no object exists.
+ * ``` fence, then scan every balanced {…} from the first open brace. The first
+ * pair is often not JSON — prose frequently opens with a curly bracket — and
+ * failing closed on it would discard a perfectly good answer that follows.
+ * Replies are bounded (the shim caps max_tokens at 1024), so the rescan is cheap.
+ * Null when no parseable object exists anywhere.
  */
 export function parseSystemoneJson(text) {
   if (typeof text !== "string") return null;
   let t = text.trim();
   const fenced = t.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/);
   if (fenced) t = fenced[1].trim();
-  const start = t.indexOf("{");
-  if (start === -1) return null;
-  // Walk to the matching close brace, honouring string literals.
-  let depth = 0;
-  let inString = false;
-  let escaped = false;
-  for (let i = start; i < t.length; i++) {
-    const ch = t[i];
-    if (inString) {
-      if (escaped) escaped = false;
-      else if (ch === "\\") escaped = true;
-      else if (ch === '"') inString = false;
-      continue;
-    }
-    if (ch === '"') inString = true;
-    else if (ch === "{") depth++;
-    else if (ch === "}") {
-      depth--;
-      if (depth === 0) {
-        try {
-          const parsed = JSON.parse(t.slice(start, i + 1));
-          return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : null;
-        } catch {
-          return null;
-        }
+  let start = t.indexOf("{");
+  while (start !== -1) {
+    // Walk to the matching close brace, honouring string literals.
+    let depth = 0;
+    let inString = false;
+    let escaped = false;
+    let matched = -1;
+    for (let i = start; i < t.length; i++) {
+      const ch = t[i];
+      if (inString) {
+        if (escaped) escaped = false;
+        else if (ch === "\\") escaped = true;
+        else if (ch === '"') inString = false;
+        continue;
+      }
+      if (ch === '"') inString = true;
+      else if (ch === "{") depth++;
+      else if (ch === "}") {
+        depth--;
+        if (depth === 0) { matched = i; break; }
       }
     }
+    if (matched === -1) break;   // unbalanced from here on — nothing left to try
+    try {
+      const parsed = JSON.parse(t.slice(start, matched + 1));
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return parsed;
+    } catch { /* not JSON — look at the next open brace past this one */ }
+    start = t.indexOf("{", start + 1);
   }
   return null;
 }
