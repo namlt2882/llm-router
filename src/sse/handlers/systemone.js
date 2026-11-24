@@ -167,6 +167,11 @@ async function handleSingleSystemone(body, modelStr, request, apiKey, settings, 
         body,
         modelInfo: { provider, model },
         credentials: refreshedCredentials,
+        // Attribution for a shimmed member's chatCore usage row (native members
+        // are attributed by the saveRequestUsage below instead).
+        connectionId: credentials.connectionId,
+        apiKey,
+        endpoint: url.pathname,
         log,
         onRequestSuccess: async () => {
           await clearAccountError(credentials.connectionId, credentials, model);

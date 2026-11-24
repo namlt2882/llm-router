@@ -55,6 +55,7 @@ describe("handleSystemoneShim", () => {
   const call = (handleChat) => handleSystemoneShim({
     body: { model: "glm-5.3-flash", state: "s", questions: Q },
     modelInfo: { provider: "glm", model: "glm-5.3-flash" }, credentials: { apiKey: "k" },
+    connectionId: "conn-9", apiKey: "sk-caller", endpoint: "/api/v1/systemone",
     handleChat,
   });
 
@@ -89,5 +90,16 @@ describe("handleSystemoneShim", () => {
     expect(res.success).toBe(false);
     expect(res.status).toBe(502);
     expect(res.error).toMatch(/chatCore 503/);
+  });
+  it("forwards the caller's attribution so chatCore's usage row is not anonymous", async () => {
+    // Minor #5: chatCore's saveUsageStats reads connectionId / apiKey /
+    // clientRawRequest.endpoint from its opts. The shim forwarded none, so every
+    // shimmed member's usage row had no connection, key or endpoint.
+    const handleChat = chatOk(JSON.stringify({ answers: good }));
+    await call(handleChat);
+    const [opts] = handleChat.mock.calls[0];
+    expect(opts.connectionId).toBe("conn-9");
+    expect(opts.apiKey).toBe("sk-caller");
+    expect(opts.clientRawRequest).toEqual({ endpoint: "/api/v1/systemone" });
   });
 });

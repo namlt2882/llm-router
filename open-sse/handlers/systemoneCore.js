@@ -55,6 +55,9 @@ export async function handleSystemoneCore({
   body,
   modelInfo,
   credentials,
+  connectionId,
+  apiKey,
+  endpoint,
   log,
   onRequestSuccess,
 }) {
@@ -64,7 +67,7 @@ export async function handleSystemoneCore({
   // account success: forward onRequestSuccess so the caller's closure clears
   // stale health marks — nothing else on the shim path would.
   if (resolveSystemoneMode({ provider, model }) === "shim") {
-    const result = await handleSystemoneShim({ body, modelInfo, credentials, log });
+    const result = await handleSystemoneShim({ body, modelInfo, credentials, connectionId, apiKey, endpoint, log });
     if (result.success) await onRequestSuccess?.();
     return result;
   }

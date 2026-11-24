@@ -137,10 +137,13 @@ const toWire = (validated) =>
  * @param {object} options.body - The incoming /v1/systemone request ({state, questions, …})
  * @param {{provider: string, model: string}} options.modelInfo
  * @param {object} options.credentials - The caller's refreshed credentials
+ * @param {string} [options.connectionId] - Attribution for chatCore's usage row
+ * @param {string} [options.apiKey] - Attribution for chatCore's usage row
+ * @param {string} [options.endpoint] - Request path, attributed on the usage row
  * @param {object} options.log
  * @param {Function} [options.handleChat] - Defaults to handleChatCore
  */
-export async function handleSystemoneShim({ body, modelInfo, credentials, log, handleChat = handleChatCore }) {
+export async function handleSystemoneShim({ body, modelInfo, credentials, connectionId, apiKey, endpoint, log, handleChat = handleChatCore }) {
   const { provider, model } = modelInfo;
   const fail = (reason) => {
     log?.warn?.("SYSTEMONE", `shim member ${provider}/${model}: ${reason}`);
@@ -164,6 +167,11 @@ export async function handleSystemoneShim({ body, modelInfo, credentials, log, h
     body: chatBody,
     modelInfo: { provider, model },
     credentials,
+    // chatCore reads connectionId / apiKey / clientRawRequest.endpoint when it
+    // saves the usage row — without these the shimmed member's row is anonymous.
+    connectionId,
+    apiKey,
+    ...(endpoint ? { clientRawRequest: { endpoint } } : {}),
     log,
     sourceFormatOverride: "openai",
   });
