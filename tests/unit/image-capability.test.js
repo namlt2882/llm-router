@@ -176,3 +176,27 @@ describe("POST /api/providers/[id]/image-check", () => {
     expect(res.status).toBe(404);
   });
 });
+
+describe("imageCapability packaging", () => {
+  // The client imports the CORE predicate, which must know the adapter set
+  // without importing the adapters (their executor graph is node-only and
+  // breaks the browser bundle — measured: `npm run build` fails through
+  // executors/index.js). adapterIds.js is the client's copy of the adapter id
+  // set; this parity test is what keeps it from drifting from the real map.
+  it("adapterIds matches the real adapter map", async () => {
+    const { IMAGE_ADAPTER_IDS } = await import("../../open-sse/handlers/imageProviders/adapterIds.js");
+    const { default: ADAPTERS } = await import("../../open-sse/handlers/imageProviders/index.js");
+    expect([...IMAGE_ADAPTER_IDS].sort()).toEqual(Object.keys(ADAPTERS).sort());
+  });
+  it("the core predicate gates on the adapter set and the registry; the server wrapper adds the grammar", async () => {
+    const core = await import("../../open-sse/providers/imageCapability.js");
+    const server = await import("../../open-sse/providers/imageCapability.server.js");
+    // rows + set: both layers agree
+    expect(core.isImageCapable("openai", "gpt-image-1")).toBe(true);
+    expect(core.isImageCapable("venice", "venice-sd35")).toBe(false);
+    expect(server.isImageCapable("openai", "gpt-image-1")).toBe(true);
+    // codex grammar: core (no adapter graph) refuses, server wrapper admits
+    expect(core.isImageCapable("codex", "gpt-5.6-sol-image")).toBe(false);
+    expect(server.isImageCapable("codex", "gpt-5.6-sol-image")).toBe(true);
+  });
+});

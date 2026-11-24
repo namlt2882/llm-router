@@ -55,3 +55,5 @@ export function getImageAdapter(provider) {
 export function isImageProvider(provider) {
   return provider in ADAPTERS;
 }
+
+export default ADAPTERS;

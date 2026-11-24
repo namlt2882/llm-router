@@ -3,7 +3,7 @@ import { getProviderConnectionById, getSettings, updateSettings } from "@/lib/lo
 import { getProviderModels, PROVIDER_ID_TO_ALIAS } from "open-sse/config/providerModels.js";
 import { UPDATER_CONFIG } from "@/shared/constants/config";
 import { pingModelByKind, getInternalHeaders } from "@/app/api/models/test/ping";
-import { isImageCapable } from "open-sse/providers/imageCapability.js";
+import { isImageCapable } from "open-sse/providers/imageCapability.server.js";
 
 /**
  * POST /api/providers/[id]/image-check — opt-in live probe (id = connectionId).
