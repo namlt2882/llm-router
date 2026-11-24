@@ -7,6 +7,9 @@ const eslintConfig = defineConfig([
   globalIgnores([
     // Default ignores of eslint-config-next:
     ".next/**",
+    // Build-gate output: `NEXT_DIST_DIR=.next-build-check npm run build` writes
+    // a full standalone bundle (with its own node_modules) here — never lint it.
+    ".next-build-check/**",
     "out/**",
     "build/**",
     "next-env.d.ts",
