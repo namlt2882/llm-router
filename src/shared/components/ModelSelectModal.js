@@ -136,6 +136,7 @@ export default function ModelSelectModal({
   const [providerNodes, setProviderNodes] = useState([]);
   const [customModels, setCustomModels] = useState([]);
   const [disabledModels, setDisabledModels] = useState({});
+  const [imageCapability, setImageCapability] = useState({});
   // Cursor and Cline expose the usable catalog per account, so the static catalog is
   // kept only as a fallback: it goes stale quickly and entitlements differ per account.
   // Single map driven by LIVE_CATALOG_PROVIDERS so the constant cannot drift
@@ -222,6 +223,37 @@ export default function ModelSelectModal({
     if (isOpen) fetchDisabledModels();
   }, [isOpen]);
 
+  // Per-connection image probe verdicts (POST /api/providers/[id]/image-check
+  // writes them). Same shape as fetchDisabledModels: whole-object state keyed
+  // connectionId -> modelId -> { ok, at, error }.
+  const fetchImageCapability = async () => {
+    try {
+      const res = await fetch("/api/settings");
+      if (!res.ok) throw new Error(`Failed to fetch settings: ${res.status}`);
+      const data = await res.json();
+      setImageCapability(data.imageCapability || {});
+    } catch (error) {
+      console.error("Error fetching image capability:", error);
+      setImageCapability({});
+    }
+  };
+
+  useEffect(() => {
+    if (isOpen) fetchImageCapability();
+  }, [isOpen]);
+
+  // true = some active connection answered ok; false = EVERY active connection
+  // of the provider has an explicit ok:false for this model (that hides the row);
+  // null = untested — never hidden, and the row shows the "unchecked" marker.
+  const imageVerdictFor = (providerId, modelId) => {
+    const conns = effectiveConnections.filter((c) => c && c.provider === providerId && c.isActive !== false);
+    if (conns.length === 0) return null;
+    const verdicts = conns.map((c) => imageCapability[c.id]?.[modelId]);
+    if (verdicts.some((v) => v?.ok === true)) return true;
+    if (conns.every((c) => imageCapability[c.id]?.[modelId]?.ok === false)) return false;
+    return null;
+  };
+
   const allProviders = useMemo(() => ({ ...OAUTH_PROVIDERS, ...FREE_PROVIDERS, ...FREE_TIER_PROVIDERS, ...APIKEY_PROVIDERS }), []);
 
   // Group models by provider with priority order
@@ -245,7 +277,14 @@ export default function ModelSelectModal({
       // Image additionally requires the registry to declare the row image-capable:
       // a provider with a `serviceKinds` badge but no image rows offered every chat
       // model in the image picker (the measured complaint).
-      if (kindFilter === "image") return models.filter((m) => m.isPlaceholder || (getModelKind(m) === kindFilter && isImageCapable(providerId, m.id)));
+      if (kindFilter === "image") {
+        return models.filter((m) => m.isPlaceholder
+          || (getModelKind(m) === kindFilter
+            && isImageCapable(providerId, m.id)
+            // Only a FAILED probe on every active connection hides a row; an
+            // absent verdict means unchecked, not failed.
+            && imageVerdictFor(providerId, m.id) !== false));
+      }
       return models.filter((m) => m.isPlaceholder || getModelKind(m) === kindFilter);
     };
 
@@ -506,7 +545,7 @@ export default function ModelSelectModal({
     });
 
     return groups;
-  }, [filteredActiveProviders, modelAliases, allProviders, providerNodes, customModels, disabledModels, kindFilter, effectiveConnections, deactivatedProviderIds, cursorModels, clineModels, clinepassModels, zedModels]);
+  }, [filteredActiveProviders, modelAliases, allProviders, providerNodes, customModels, disabledModels, imageCapability, kindFilter, effectiveConnections, deactivatedProviderIds, cursorModels, clineModels, clinepassModels, zedModels]);
 
   // Parse search query into structured query (regex, positive tokens, negative tokens)
   const parsedQuery = useMemo(() => parseSearchQuery(searchQuery), [searchQuery]);
@@ -840,6 +879,16 @@ export default function ModelSelectModal({
                       ) : (
                         <>
                           {model.name}
+                          {kindFilter === "image" && imageVerdictFor(providerId, model.id) !== true && (
+                            <span
+                              className="text-[9px] font-normal opacity-60"
+                              title={imageVerdictFor(providerId, model.id) === false
+                                ? "Image probe failed on every active connection"
+                                : "Image capability not probed yet"}
+                            >
+                              {imageVerdictFor(providerId, model.id) === false ? "failed" : "unchecked"}
+                            </span>
+                          )}
                           <CapacityBadges caps={getCaps(model.value)} />
                         </>
                       )}
