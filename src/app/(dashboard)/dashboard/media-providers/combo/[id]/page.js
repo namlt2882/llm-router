@@ -3,7 +3,8 @@
 import { useParams, notFound, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { Card, Button, Input, Toggle, ModelSelectModal } from "@/shared/components";
+import { Card, Button, Input, Toggle, ModelSelectModal, Select } from "@/shared/components";
+import { mergeStrategyPatch } from "@/app/(dashboard)/dashboard/combos/strategy-config.js";
 import ProviderIcon from "@/shared/components/ProviderIcon";
 import { AI_PROVIDERS, MEDIA_PROVIDER_KINDS } from "@/shared/constants/providers";
 
@@ -22,6 +23,7 @@ const KIND_LABELS = {
   webFetch: "Web Fetch",
   image: "Text to Image",
   tts: "Text To Speech",
+  systemone: "System One",
 };
 
 const EXAMPLE_PATHS = {
@@ -29,6 +31,7 @@ const EXAMPLE_PATHS = {
   webFetch: "/v1/web/fetch",
   image: "/v1/images/generations",
   tts: "/v1/audio/speech",
+  systemone: "/v1/systemone",
 };
 
 const EXAMPLE_BODIES = {
@@ -36,7 +39,21 @@ const EXAMPLE_BODIES = {
   webFetch: (n) => ({ model: n, url: "https://example.com", format: "markdown" }),
   image: (n) => ({ model: n, prompt: "A cute cat playing piano", n: 1, size: "1024x1024" }),
   tts: (n) => ({ model: n, input: "Hello, this is a test.", voice: "alloy" }),
+  systemone: (n) => ({
+    model: n,
+    state: "Customer: I was charged twice for my order this morning.",
+    questions: { probe: { type: "noul", instructions: "Is the customer reporting a billing problem?" } },
+  }),
 };
+
+// systemone combos answer only the three strategies that make sense for a
+// single-response protocol — smart/fusion are text-combo policies (Task 9
+// refuses them with a 400), so this page must not offer them.
+const STRATEGY_OPTIONS = [
+  { value: "fallback", label: "Fallback — try in order" },
+  { value: "round-robin", label: "Round Robin — rotate" },
+  { value: "fanout", label: "Fanout — fan accounts by budget" },
+];
 
 // Map combo.kind → listing route to go back to
 function getListingHref(kind) {
@@ -53,6 +70,7 @@ export default function ComboDetailPage() {
   const [nameError, setNameError] = useState("");
   const [providers, setProviders] = useState([]);
   const [roundRobin, setRoundRobin] = useState(false);
+  const [strategy, setStrategy] = useState("fallback");
   const [showPicker, setShowPicker] = useState(false);
   const [logs, setLogs] = useState([]);
   const [testing, setTesting] = useState(false);
@@ -85,6 +103,7 @@ export default function ComboDetailPage() {
       setProviders(c.models || []);
       const s = settingsRes.ok ? await settingsRes.json() : {};
       setRoundRobin(s.comboStrategies?.[c.name]?.fallbackStrategy === "round-robin");
+      setStrategy(s.comboStrategies?.[c.name]?.fallbackStrategy || "fallback");
       const allLogs = logsRes.ok ? await logsRes.json() : [];
       setLogs(allLogs.filter((l) => typeof l === "string" && l.includes(c.name)).slice(0, 50));
     } catch { /* noop */ }
@@ -161,6 +180,29 @@ export default function ComboDetailPage() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ comboStrategies: updated }),
     });
+  };
+
+  // Same shape as the LLM combos page: mergeStrategyPatch returns the entry to
+  // store, or null when nothing meaningful remains — choosing Fallback (the
+  // default everywhere) DELETES the entry instead of storing "fallback".
+  // updateSettings shallow-merges, so the whole map is written back.
+  const handleSetStrategy = async (value) => {
+    setStrategy(value);
+    try {
+      const settingsRes = await fetch("/api/settings", { cache: "no-store" });
+      const s = settingsRes.ok ? await settingsRes.json() : {};
+      const updated = { ...(s.comboStrategies || {}) };
+      const next = mergeStrategyPatch(updated[combo.name] || {}, { fallbackStrategy: value });
+      if (next) updated[combo.name] = next;
+      else delete updated[combo.name];
+      await fetch("/api/settings", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ comboStrategies: updated }),
+      });
+    } catch (error) {
+      console.log("Error updating combo strategy:", error);
+    }
   };
 
   const handleDelete = async () => {
@@ -268,13 +310,29 @@ export default function ComboDetailPage() {
             <Input label="Combo Name" value={name} onChange={(e) => { setName(e.target.value); validateName(e.target.value); }} onBlur={handleSaveName} error={nameError} />
             <p className="text-[10px] text-text-muted mt-0.5">Only letters, numbers, -, _ and .</p>
           </div>
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-sm font-medium">Round Robin</p>
-              <p className="text-xs text-text-muted">Rotate providers across requests instead of strict fallback order.</p>
+          {combo.kind === "systemone" ? (
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <p className="text-sm font-medium">Strategy</p>
+                <p className="text-xs text-text-muted">How requests move between the combo&apos;s members.</p>
+              </div>
+              <div className="w-full sm:w-[240px]">
+                <Select
+                  options={STRATEGY_OPTIONS}
+                  value={strategy}
+                  onChange={(e) => handleSetStrategy(e.target.value)}
+                />
+              </div>
             </div>
-            <Toggle checked={roundRobin} onChange={handleToggleRoundRobin} />
-          </div>
+          ) : (
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm font-medium">Round Robin</p>
+                <p className="text-xs text-text-muted">Rotate providers across requests instead of strict fallback order.</p>
+              </div>
+              <Toggle checked={roundRobin} onChange={handleToggleRoundRobin} />
+            </div>
+          )}
         </div>
       </Card>
 
