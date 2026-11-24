@@ -154,6 +154,9 @@ describe("POST /api/providers/[id]/image-check", () => {
     expect(probed.every((m) => m.startsWith("openai/"))).toBe(true);
     expect(probed).toHaveLength(6);
     expect(probed[0]).toBe("openai/gpt-image-2.5");   // warm-up runs FIRST, serialised
+    // Minor #1: every probe must pin the connection it stores a verdict for —
+    // a sibling connection's key must never answer a probe attributed here.
+    expect(mocks.ping.mock.calls.every((c) => c[3] === "conn-1")).toBe(true);
 
     expect(fx.updated).toHaveLength(1);
     const map = fx.updated[0].imageCapability;

@@ -55,8 +55,12 @@ export async function getInternalHeaders() {
   return headers;
 }
 
-export async function pingModelByKind(model, kind, baseUrl = `http://127.0.0.1:${process.env.PORT || UPDATER_CONFIG.appPort}`) {
+export async function pingModelByKind(model, kind, baseUrl = `http://127.0.0.1:${process.env.PORT || UPDATER_CONFIG.appPort}`, connectionId = null) {
   const headers = await getInternalHeaders();
+  // A probe that stores its verdict under one connection must be answered by
+  // THAT connection's credentials — /v1/images/generations honours the pin
+  // (and refuses rather than serving a sibling when it cannot).
+  if (connectionId) headers["x-connection-id"] = connectionId;
   const start = Date.now();
 
   if (kind === "embedding") {

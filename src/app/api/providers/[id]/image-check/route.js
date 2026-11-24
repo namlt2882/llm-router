@@ -48,10 +48,12 @@ export async function POST(request, { params }) {
 
     // Warm up with the first model to trigger token refresh before the parallel
     // calls (same reasoning as test-models: parallel probes would race one refresh).
+    // Every probe pins THIS connection (4th arg): selection otherwise picks any
+    // active sibling, and the verdict would be measured on the wrong credentials.
     const [first, ...rest] = imageModels;
-    const firstResult = await pingModelByKind(`${alias}/${first.id}`, "image", baseUrl);
+    const firstResult = await pingModelByKind(`${alias}/${first.id}`, "image", baseUrl, id);
     const restResults = await Promise.all(
-      rest.map((m) => pingModelByKind(`${alias}/${m.id}`, "image", baseUrl))
+      rest.map((m) => pingModelByKind(`${alias}/${m.id}`, "image", baseUrl, id))
     );
     const results = imageModels.map((m, i) => {
       const r = i === 0 ? firstResult : restResults[i - 1];

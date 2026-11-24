@@ -116,4 +116,22 @@ describe("image combo fanout", () => {
     mocks.imgCore.mockResolvedValue({ success: true, response: sentinel });
     await expect(handleImageGeneration(req("img-combo"))).resolves.toBe(sentinel);
   });
+
+  it("treats x-connection-id as a HARD pin: a sibling must never answer, and its slot goes back", async () => {
+    // The image probe pins the connection whose verdict it is storing. Selection
+    // honours preferredConnectionId only as a SOFT preference — on a cooldown or
+    // in-flight cap it falls through to the strategy and a sibling connection
+    // serves the request — so a soft pin stores a sibling's verdict under the
+    // pinned id. Refuse instead.
+    mocks.getCreds.mockResolvedValue({ connectionId: "sibling", connectionName: "S", apiKey: "k", providerSpecificData: {} });
+    const res = await handleImageGeneration(req("openai/dall-e-3", { "x-connection-id": "pinned" }));
+    expect(res.status).toBe(503);
+    expect(mocks.imgCore).not.toHaveBeenCalled();
+  });
+
+  it("keeps serving when the pinned connection IS the one selected", async () => {
+    const res = await handleImageGeneration(req("openai/dall-e-3", { "x-connection-id": "acct" }));
+    expect(res.status).toBe(200);
+    expect(mocks.imgCore).toHaveBeenCalledTimes(1);
+  });
 });

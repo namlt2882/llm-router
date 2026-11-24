@@ -158,6 +158,18 @@ async function handleSingleModelImage(body, modelStr, { wantsStream, binaryOutpu
       return errorResponse(lastStatus || HTTP_STATUS.SERVICE_UNAVAILABLE, lastError || "All accounts unavailable");
     }
 
+    // A caller-pinned connection (x-connection-id — the image probe pins the row
+    // whose verdict it stores) is a HARD pin here: selection honours
+    // preferredConnectionId only as a soft preference, so on a cooldown or an
+    // in-flight cap the strategy would hand the request to a SIBLING connection,
+    // and the probe would store a sibling's verdict under the pinned id. Release
+    // the slot and refuse instead of serving misattributed work.
+    if (preferredConnectionId && credentials.connectionId !== preferredConnectionId) {
+      log.warn("IMAGE", `[${provider}/${model}] pinned connection ${preferredConnectionId.slice(0, 8)} unavailable; refusing instead of serving a sibling`);
+      releaseAccountSlot(credentials.connectionId);
+      return errorResponse(HTTP_STATUS.SERVICE_UNAVAILABLE, `Pinned connection is unavailable for ${provider}/${model}`);
+    }
+
     const refreshedCredentials = await checkAndRefreshToken(provider, credentials);
 
     // Skip accounts the adapter knows cannot generate images (e.g. ChatGPT Free on codex)
