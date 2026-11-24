@@ -33,6 +33,22 @@ vi.mock("@/sse/services/model.js", () => ({
 vi.mock("@/sse/services/fanoutModels.js", () => ({
   orderModelsByHeadroom: mocks.order,
   rememberServedModel: mocks.remember,
+  // chat.js now imports the shared wrapper (Task 1); reproduce it against
+  // mocks.order so this file still pins ordering via the real call chain.
+  orderFanoutAttempt: async ({ models, comboName, sessionId, fanoutCtx, getModelInfo, attempt, onServed }) => {
+    if (!fanoutCtx) return { models, attemptOrdered: attempt };
+    const ordered = await mocks.order({ models, comboName, sessionId, fanoutCtx, getModelInfo });
+    let released = false;
+    const release = () => { if (!released) { released = true; ordered.release(); } };
+    const attemptOrdered = async (b, m) => {
+      try {
+        const result = await attempt(b, m);
+        if (result?.ok && onServed) onServed(b, m);
+        return result;
+      } finally { release(); }
+    };
+    return { models: ordered.models, attemptOrdered };
+  },
 }));
 vi.mock("open-sse/services/combo.js", () => ({
   handleComboChat: mocks.handleComboChat,

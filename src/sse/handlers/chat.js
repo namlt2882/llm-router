@@ -11,7 +11,7 @@ import { parsePriority } from "../services/accountInflight.js";
 import { gateBudget, budgetRefusalResponse, setBudgetCtx, getBudgetCtx } from "open-sse/utils/budget.js";
 import { effectiveSalePrice } from "@/lib/pricing/effectiveSalePrice.js";
 import { fanoutCtxForEntry } from "../services/fanoutBudget.js";
-import { orderModelsByHeadroom, rememberServedModel } from "../services/fanoutModels.js";
+import { orderFanoutAttempt, rememberServedModel } from "../services/fanoutModels.js";
 import { handleAntigravityQuotaError, clearAntigravityStrikes } from "../services/antigravityQuota.js";
 import { getSettings } from "@/lib/localDb";
 import { getModelInfo, getComboModels } from "../services/model.js";
@@ -161,31 +161,14 @@ export async function handleChat(request, clientRawRequest = null) {
 
     const comboStickyLimit = settings.comboStickyRoundRobinLimit;
     const comboCfg = comboStrategies[modelStr] || {};
-    // Fork patch #22: a fanout combo tries the emptiest lane's model first
-    // instead of always starting at model 1. The pick is reserved until the
-    // first attempt returns so a concurrent burst spreads.
-    let orderedModels = augmentedModels;
-    let releaseOrder = () => {};
-    if (fanoutCfg) {
-      const ordered = await orderModelsByHeadroom({
-        models: augmentedModels, comboName: modelStr, sessionId, fanoutCtx: fanoutCfg, getModelInfo,
-      });
-      orderedModels = ordered.models;
-      releaseOrder = ordered.release;
-    }
-    const attempt = (b, m) => handleSingleModelChat(b, m, clientRawRequest, request, apiKey, null, sessionId, fanoutCfg);
-    let released = false;
-    const attemptOrdered = fanoutCfg
-      ? async (b, m) => {
-          try {
-            const result = await attempt(b, m);
-            if (result?.ok) rememberServedModel(modelStr, sessionId, m);
-            return result;
-          } finally {
-            if (!released) { released = true; releaseOrder(); }
-          }
-        }
-      : attempt;
+    // Fork patch #22, now shared: orderFanoutAttempt (fanoutModels.js) owns the
+    // order-then-release-once wrapper chat used to inline. Image/search/systemone
+    // combos call the identical shape, so the rule cannot drift per handler.
+    const { models: orderedModels, attemptOrdered } = await orderFanoutAttempt({
+      models: augmentedModels, comboName: modelStr, sessionId, fanoutCtx: fanoutCfg, getModelInfo,
+      attempt: (b, m) => handleSingleModelChat(b, m, clientRawRequest, request, apiKey, null, sessionId, fanoutCfg),
+      onServed: (_b, m) => rememberServedModel(modelStr, sessionId, m),
+    });
     log.info("CHAT", `Combo "${modelStr}" with ${orderedModels.length} models (strategy: ${comboStrategy}, sticky: ${comboStickyLimit})`);
     return handleComboChat({
       body,

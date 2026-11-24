@@ -145,6 +145,28 @@ export function rememberServedModel(comboName, sessionId, model) {
   if (sessionId) setStickyComboModel(comboName, sessionId, model);
 }
 
+/**
+ * Order a combo's attempts and release the headroom reservation once.
+ * Chat owned this wrapper inline (patch #22); image/search/systemone need the
+ * identical shape, and a second copy is where the release-once rule would rot.
+ * `attempt` is returned untouched when the combo does not route as fanout, and
+ * the returned function never touches the Response body.
+ */
+export async function orderFanoutAttempt({ models, comboName, sessionId, fanoutCtx, getModelInfo, attempt, onServed = null }) {
+  if (!parseFanoutCtx(fanoutCtx)) return { models, attemptOrdered: attempt };
+  const ordered = await orderModelsByHeadroom({ models, comboName, sessionId, fanoutCtx, getModelInfo });
+  let released = false;
+  const release = () => { if (!released) { released = true; ordered.release(); } };
+  const attemptOrdered = async (body, model) => {
+    try {
+      const result = await attempt(body, model);
+      if (result?.ok && onServed) onServed(body, model);
+      return result;
+    } finally { release(); }
+  };
+  return { models: ordered.models, attemptOrdered };
+}
+
 export function __resetFanoutModels() {
   reservations.clear();
   picks.clear();

@@ -14,7 +14,10 @@ import { errorResponse, unavailableResponse } from "open-sse/utils/error.js";
 import { HTTP_STATUS } from "open-sse/config/runtimeConfig.js";
 import { updateProviderCredentials, checkAndRefreshToken } from "../services/tokenRefresh.js";
 import { handleComboChat } from "open-sse/services/combo.js";
-import { releaseAccountSlot, releaseSlotWithBody } from "../services/accountInflight.js";
+import { releaseAccountSlot, releaseSlotWithBody, parsePriority } from "../services/accountInflight.js";
+import { orderFanoutAttempt } from "../services/fanoutModels.js";
+import { fanoutCtxForEntry } from "../services/fanoutBudget.js";
+import { resolveSessionIdentity } from "open-sse/utils/sessionManager.js";
 import * as log from "../utils/logger.js";
 import { saveRequestUsage } from "@/lib/usageDb.js";
 
@@ -74,28 +77,43 @@ export async function handleImageGeneration(request) {
   const keyAccessDenied = await enforceKeyAccess(await getKeyAccessContext(request), modelStr);
   if (keyAccessDenied) return keyAccessDenied;
 
+  // Fanout identity, computed once per request. `resolveSessionIdentity` reads
+  // `headers[key]` on a PLAIN object (sessionManager.js `headerValue`), so a
+  // `Headers` instance yields nothing — chat.js already normalizes it with
+  // `Object.fromEntries(request.headers.entries())`; copy that, never pass
+  // `request.headers`. `parsePriority`, unlike session identity, handles Headers.
+  const sessionId = resolveSessionIdentity({ headers: Object.fromEntries(request.headers.entries()), body })?.sessionId || null;
+  const priority = parsePriority(request.headers);
+
   // Combo expansion: model may be a combo name → run fallback/round-robin across models
   const comboModels = await getComboModels(modelStr);
   if (comboModels) {
     const comboStrategies = settings.comboStrategies || {};
     const comboStrategy = comboStrategies[modelStr]?.fallbackStrategy || settings.comboStrategy || "fallback";
     const comboStickyLimit = settings.comboStickyRoundRobinLimit;
-    log.info("IMAGE", `Combo "${modelStr}" with ${comboModels.length} models (strategy: ${comboStrategy}, sticky: ${comboStickyLimit})`);
+    const fanoutCfg = fanoutCtxForEntry(settings.comboStrategies?.[modelStr]);
+    const single = (b, m, sel) => handleSingleModelImage(b, m, { wantsStream, binaryOutput, preferredConnectionId, apiKey, endpoint: url.pathname }, sel);
+    const { models: ordered, attemptOrdered } = await orderFanoutAttempt({
+      models: comboModels, comboName: modelStr, sessionId, fanoutCtx: fanoutCfg, getModelInfo,
+      attempt: (b, m) => single(b, m, { fanout: fanoutCfg, sessionId, priority, wait: true }),
+    });
+    log.info("IMAGE", `Combo "${modelStr}" with ${ordered.length} models (strategy: ${comboStrategy}, sticky: ${comboStickyLimit})`);
     return handleComboChat({
       body,
-      models: comboModels,
-      handleSingleModel: (b, m) => handleSingleModelImage(b, m, { wantsStream, binaryOutput, preferredConnectionId, apiKey, endpoint: url.pathname }),
+      models: ordered,
+      handleSingleModel: attemptOrdered,
       log,
       comboName: modelStr,
       comboStrategy,
       comboStickyLimit,
+      sessionId,
     });
   }
 
   return handleSingleModelImage(body, modelStr, { wantsStream, binaryOutput, preferredConnectionId, apiKey, endpoint: url.pathname });
 }
 
-async function handleSingleModelImage(body, modelStr, { wantsStream, binaryOutput, preferredConnectionId, apiKey, endpoint } = {}) {
+async function handleSingleModelImage(body, modelStr, { wantsStream, binaryOutput, preferredConnectionId, apiKey, endpoint } = {}, selection = null) {
   const modelInfo = await getModelInfo(modelStr);
   if (!modelInfo.provider) return errorResponse(HTTP_STATUS.BAD_REQUEST, "Invalid model format");
 
@@ -119,7 +137,7 @@ async function handleSingleModelImage(body, modelStr, { wantsStream, binaryOutpu
   let lastStatus = null;
 
   while (true) {
-    const credentials = await getProviderCredentials(provider, excludeConnectionIds, model, { preferredConnectionId });
+    const credentials = await getProviderCredentials(provider, excludeConnectionIds, model, { ...(selection || {}), preferredConnectionId });
 
     if (!credentials || credentials.allRateLimited) {
       if (credentials?.allRateLimited) {
