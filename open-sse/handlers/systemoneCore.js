@@ -60,9 +60,13 @@ export async function handleSystemoneCore({
 }) {
   const { provider, model } = modelInfo;
   // A member without a native protocol speaker (plain text model) answers
-  // through the validated JSON shim instead of refusing.
+  // through the validated JSON shim instead of refusing. A shim success is an
+  // account success: forward onRequestSuccess so the caller's closure clears
+  // stale health marks — nothing else on the shim path would.
   if (resolveSystemoneMode({ provider, model }) === "shim") {
-    return handleSystemoneShim({ body, modelInfo, credentials, log });
+    const result = await handleSystemoneShim({ body, modelInfo, credentials, log });
+    if (result.success) await onRequestSuccess?.();
+    return result;
   }
   const cfg = PROVIDER_MEDIA[provider]?.systemoneConfig;
   let targetUrl = buildSystemoneUrl(credentials?.providerSpecificData?.baseUrl, cfg);

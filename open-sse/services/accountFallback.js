@@ -31,6 +31,16 @@ export function checkFallbackError(status, errorText, backoffLevel = 0, provider
     ? (typeof errorText === "string" ? errorText : JSON.stringify(errorText)).toLowerCase()
     : "";
 
+  // A systemone shim member-output failure (the model answered prose, or the
+  // reply stopped being parseable JSON) is a property of the MODEL, never the
+  // credential: no account lock (markAccountUnavailable early-returns on
+  // shouldFallback:false), and combo rotation advances immediately. The bare
+  // shape is the shim's own error result; the wrapped shape ("[glm/x]
+  // systemone-shim: …") is what the combo loop extracts from the response body.
+  if (lowerError.includes("systemone-shim:")) {
+    return { shouldFallback: false, cooldownMs: 0, requestScoped: true };
+  }
+
   for (const rule of ERROR_RULES) {
     if (rule.provider && rule.provider !== provider) continue;
     // Text-based rule: match substring in error message
