@@ -8,6 +8,7 @@ import { applyQoderModelNames } from "@/shared/utils/providerCustomModels";
 // registered custom models, live per-account catalogs, disabled models) used to
 // be invisible to other callers.
 import { getModelsByProviderId, getModelKind } from "@/shared/constants/models";
+import { isImageCapable } from "open-sse/providers/imageCapability.js";
 import {
   OAUTH_PROVIDERS,
   APIKEY_PROVIDERS,
@@ -94,12 +95,16 @@ export function buildModelGroups({
   const ALLOW_PROVIDER_FALLBACK_KINDS = new Set(["tts", "image", "webFetch"]);
 
   // Filter a models[] array by kindFilter (keep only matching kind)
-  const filterByKind = (models) => {
+  const filterByKind = (models, providerId) => {
     // No kindFilter means the LLM selector. Keep custom models visible because
     // user-added models may have typed capabilities (for example imageToText)
     // while still being valid chat/combo targets.
     if (!kindFilter) return models.filter((m) => m.isPlaceholder || m.isCustom || !getModelKind(m) || getModelKind(m) === "llm");
     if (!TYPED_KINDS.has(kindFilter)) return models;
+    // Image additionally requires the registry to declare the row image-capable:
+    // a provider with a `serviceKinds` badge but no image rows offered every chat
+    // model in the image picker (the measured complaint).
+    if (kindFilter === "image") return models.filter((m) => m.isPlaceholder || (getModelKind(m) === kindFilter && isImageCapable(providerId, m.id)));
     return models.filter((m) => m.isPlaceholder || getModelKind(m) === kindFilter);
   };
 
@@ -158,6 +163,7 @@ export function buildModelGroups({
       return;
     }
 
+    const providerAsModelIsImageCapable = kindFilter !== "image" || isImageCapable(providerId, providerId);
     if (providerInfo.passthroughModels) {
       const aliasModels = Object.entries(modelAliasesSafe)
         .filter(([, fullModel]) => fullModel.startsWith(`${alias}/`))
@@ -183,12 +189,12 @@ export function buildModelGroups({
         combined = [
           ...registeredTyped,
           ...getModelsByProviderId(providerId)
-          .filter((m) => getModelKind(m) === kindFilter)
+          .filter((m) => getModelKind(m) === kindFilter && (kindFilter !== "image" || isImageCapable(providerId, m.id)))
           .map((m) => ({ id: m.id, name: m.name, value: `${alias}/${m.id}`, kind: getModelKind(m) }))
           .filter((m) => !registeredTyped.some((registered) => registered.value === m.value)),
         ];
         // Fallback: provider-as-model when no hardcoded models match (tts/image/webFetch only)
-        if (combined.length === 0 && ALLOW_PROVIDER_FALLBACK_KINDS.has(kindFilter)) {
+        if (combined.length === 0 && ALLOW_PROVIDER_FALLBACK_KINDS.has(kindFilter) && providerAsModelIsImageCapable) {
           const supports = (providerInfo.serviceKinds || ["llm"]).includes(kindFilter);
           if (supports) combined = [{ id: providerId, name: providerInfo.name, value: alias }];
         }
@@ -302,11 +308,11 @@ export function buildModelGroups({
         if (seen.has(m.value)) return false;
         seen.add(m.value);
         return true;
-      }));
+      }), providerId);
 
       // Provider-as-model fallback: providers that support the kind but have no hardcoded models
       // can still be picked (value = providerAlias). Skips embedding (always needs model).
-      if (allModels.length === 0 && kindFilter && ALLOW_PROVIDER_FALLBACK_KINDS.has(kindFilter)) {
+      if (allModels.length === 0 && kindFilter && ALLOW_PROVIDER_FALLBACK_KINDS.has(kindFilter) && providerAsModelIsImageCapable) {
         const supports = (providerInfo.serviceKinds || ["llm"]).includes(kindFilter);
         if (supports) {
           allModels = [{ id: providerId, name: providerInfo.name, value: alias }];

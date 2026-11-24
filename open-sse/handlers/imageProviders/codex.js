@@ -437,5 +437,11 @@ export default {
     if (usage && onUsage) await onUsage(usage);
     return { created: nowSec(), data: [{ b64_json: b64 }] };
   },
+  // The registry keys exact ids, but codex's image id space is open: ANY model
+  // can be requested as `<base>-image` (resolveCodexImageModels strips the
+  // suffix and drives the image_generation tool). The registry cannot
+  // enumerate that grammar, so the adapter declares it here and the capability
+  // gate consults it after the exact-row lookup misses.
+  acceptsImageModel: (model) => typeof model === "string" && model.endsWith(CODEX_MODEL_SUFFIX) && model.length > CODEX_MODEL_SUFFIX.length,
   normalize: (responseBody) => responseBody,
 };

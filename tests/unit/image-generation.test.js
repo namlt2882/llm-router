@@ -108,7 +108,7 @@ describe("handleImageGenerationCore", () => {
 
     const result = await handleImageGenerationCore({
       body: { prompt: "A sunset" },
-      modelInfo: { provider: "gemini", model: "gemini-image-preview" },
+      modelInfo: { provider: "gemini", model: "gemini-2.5-flash-image" },
       credentials: { apiKey: "test-key" },
       log: null,
     });

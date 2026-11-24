@@ -2,6 +2,7 @@ import { createErrorResult, parseUpstreamError, formatProviderError } from "../u
 import { HTTP_STATUS } from "../config/runtimeConfig.js";
 import { refreshWithRetry } from "../services/tokenRefresh.js";
 import { getExecutor } from "../executors/index.js";
+import { isImageCapable } from "../providers/imageCapability.js";
 import { getImageAdapter } from "./imageProviders/index.js";
 import { urlToBase64 } from "./imageProviders/_base.js";
 
@@ -49,6 +50,16 @@ export async function handleImageGenerationCore({
     return createErrorResult(
       HTTP_STATUS.BAD_REQUEST,
       `Provider '${provider}' does not support image generation`
+    );
+  }
+
+  // One capability gate (imageCapability.js): the adapter proves the provider
+  // serves images at all; the registry proves THIS model declares image kind.
+  // A kind-less chat row must not reach the executor.
+  if (!isImageCapable(provider, model)) {
+    return createErrorResult(
+      HTTP_STATUS.BAD_REQUEST,
+      `Provider '${provider}' cannot generate images for model '${model}'`
     );
   }
 

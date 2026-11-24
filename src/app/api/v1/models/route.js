@@ -23,6 +23,7 @@ import { updateProviderCredentials } from "@/sse/services/tokenRefresh";
 import { resolveConnectionProxyConfig } from "@/lib/network/connectionProxy";
 import { capabilitiesFromServiceKind, getCapabilitiesForModel, aggregateComboCapabilities } from "open-sse/providers/capabilities.js";
 import { getThinkingLevels } from "open-sse/providers/thinkingLevels.js";
+import { isImageCapable } from "open-sse/providers/imageCapability.js";
 
 // Qoder shares one live resolver across intl (qoder) and CN (qoder-cn); the
 // credentials carry the provider id so qoderModels picks the right region's
@@ -408,6 +409,19 @@ export async function buildModelsList(kindFilter, options = {}) {
     } else {
       const comboCaps = aggregateComboCapabilities(combo.models, comboByName, comboSeatCapabilities);
       if (comboCaps) entry.capabilities = comboCaps;
+      // An image combo publishes imageOutput like every other aggregated flag:
+      // `some` — any capable member serves the request. Membership itself is
+      // guarded at selection (isImageCapable in the picker and handlers).
+      if (combo.kind === "image") {
+        entry.capabilities = {
+          ...(comboCaps || {}),
+          imageOutput: combo.models.some((m) => {
+            const i = m.indexOf("/");
+            if (i <= 0) return false;
+            return isImageCapable(ALIAS_TO_PROVIDER_ID[m.slice(0, i)] || m.slice(0, i), m.slice(i + 1));
+          }),
+        };
+      }
       // Any seat can serve the request, so the only window a combo can promise is
       // its smallest. Combo entries were the only models on this endpoint that
       // published no limits at all, which leaves a client to guess from the name —
@@ -596,6 +610,13 @@ export async function buildModelsList(kindFilter, options = {}) {
         const serviceCaps = capabilitiesFromServiceKind(customKind || liveKind);
         const caps = liveCaps || serviceCaps || (kind === LLM_KIND ? getCapabilitiesForModel(providerId, modelId) : null);
         if (caps) model.capabilities = caps;
+        // The service-kind table flags only the image ids its patterns catch; the
+        // registry knows the rest. Overlay the flag — `caps` stays authoritative
+        // for contextWindow/maxOutput/vision, and non-capable rows are not dropped
+        // (the static filter upstream already decides which ids reach here).
+        if (kind === "image" && isImageCapable(providerId, modelId)) {
+          model.capabilities = { ...(model.capabilities || {}), imageOutput: true };
+        }
         // Token limits under the snake_case names the OpenAI/OpenRouter
         // convention uses. `capabilities.contextWindow` is camelCase and nested,
         // so clients matching context_length find nothing, fall back to guessing
