@@ -13,6 +13,7 @@ import { isImageCapable } from "open-sse/providers/imageCapability.js";
 import { OAUTH_PROVIDERS, APIKEY_PROVIDERS, FREE_PROVIDERS, FREE_TIER_PROVIDERS, AI_PROVIDERS, isOpenAICompatibleProvider, isAnthropicCompatibleProvider, getProviderAlias } from "@/shared/constants/providers";
 import { parseSearchQuery, matchesSearch } from "@/shared/utils/modelSearchFilter";
 import { getDeactivatedProviderIds } from "@/shared/utils/connectionStatus";
+import { connectionServesSystemone, modelServesSystemone } from "@/shared/utils/systemonePicker";
 import { NO_AUTH_PROVIDER_IDS } from "@/shared/utils/selectableModels";
 
 // Provider order: OAuth first, then Free Tier, then API Key (matches dashboard/providers)
@@ -120,6 +121,9 @@ export default function ModelSelectModal({
     if (!kindFilter) return activeOnly;
     return activeOnly.filter((p) => {
       const info = AI_PROVIDERS[p.provider];
+      // A systemone combo seats native rows AND plain text models (shim), so an
+      // llm-capable provider must not be dropped from that picker.
+      if (kindFilter === "systemone") return connectionServesSystemone(info?.serviceKinds);
       const kinds = info?.serviceKinds || ["llm"];
       return kinds.includes(kindFilter);
     });
@@ -284,6 +288,12 @@ export default function ModelSelectModal({
             // Only a FAILED probe on every active connection hides a row; an
             // absent verdict means unchecked, not failed.
             && imageVerdictFor(providerId, m.id) !== false));
+      }
+      // A systemone combo seats native rows AND text models (the shim asks them
+      // once with a strict json_schema). Placeholders (bare provider entries)
+      // are not valid member ids and stay out.
+      if (kindFilter === "systemone") {
+        return models.filter((m) => !m.isPlaceholder && modelServesSystemone(getModelKind(m)));
       }
       return models.filter((m) => m.isPlaceholder || getModelKind(m) === kindFilter);
     };
