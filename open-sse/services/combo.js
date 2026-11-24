@@ -349,6 +349,7 @@ export function isZeroContentResponse(data) {
  * @param {boolean} [options.sessionSticky=true] - Keep chosen model across session requests to retain prompt cache
  * @param {number} [options.confidenceThreshold=0.8] - Minimum confidence required for model switch (0-1)
  * @param {Function|null} [options.resolveSmartChoice=null] - Smart router resolver callback: (body, models) => Promise<{ choice, probabilities, confidence } | null>
+ * @param {Function|null} [options.isUsable=null] - Non-stream 2xx JSON predicate: commit the seat only when isUsable(body) is true, in addition to the zero-content rule
  * @returns {Promise<Response>}
  */
 export async function handleComboChat({
@@ -365,6 +366,7 @@ export async function handleComboChat({
   sessionSticky = true,
   confidenceThreshold = 0.8,
   resolveSmartChoice = null,
+  isUsable = null,
 }) {
   let rotatedModels = models;
   let activeStickyModel = null;
@@ -496,26 +498,32 @@ export async function handleComboChat({
         }
 
         if (!peeked) {
-          // Non-streaming (or non-SSE) response — not this peek's job. The zero-content
-          // JSON check still applies on a non-final seat.
+          // Non-streaming (or non-SSE) response — not this peek's job. Two
+          // independent reasons to abandon a seat on a 2xx JSON body: zero
+          // usable content (SSE-frame-shaped replies, non-final seat only) and
+          // a caller-supplied predicate that rejects the body (checked on every
+          // seat, including the last). Either one suffices; they accumulate.
           const isLastModel = i === rotatedModels.length - 1;
-          if (!isLastModel) {
-            const contentType = result.headers?.get?.("content-type") || "";
-            if (contentType.includes("application/json")) {
-              try {
-                const peekBody = await result.clone().json();
-                if (isZeroContentResponse(peekBody)) {
-                  log.warn("COMBO", `Model ${modelStr} returned HTTP 200 with zero usable content, falling back to next model`);
-                  if (comboStrategy === "smart" && sessionId && modelStr === activeStickyModel) {
-                    clearStickyComboSession(comboName, sessionId);
-                  }
-                  lastError = "Zero usable content";
-                  lastStatus = 200;
-                  continue;
-                }
-              } catch {
-                // Ignore JSON parse errors
+          const contentType = result.headers?.get?.("content-type") || "";
+          if (contentType.includes("application/json")) {
+            let peekBody = null;
+            try { peekBody = await result.clone().json(); } catch { /* not JSON after all */ }
+            const emptySeat = !isLastModel && peekBody !== null && isZeroContentResponse(peekBody);
+            const rejectedSeat = peekBody !== null && typeof isUsable === "function" && !isUsable(peekBody);
+            if (emptySeat || rejectedSeat) {
+              log.warn("COMBO", `Model ${modelStr} returned HTTP 200 with ${emptySeat ? "zero usable content" : "a body the caller rejected as unusable"}, falling back`);
+              if (comboStrategy === "smart" && sessionId && modelStr === activeStickyModel) {
+                clearStickyComboSession(comboName, sessionId);
               }
+              lastError = emptySeat ? "Zero usable content" : "unusable member response";
+              // Zero-content keeps today's 200 so the tail's `lastStatus || 503` cannot
+              // promote a one-seat ``{"choices":[]}`` past the exemption; a rejected body
+              // must LOSE to that 200 when both happened, so it only writes its 502 over
+              // a status that is not already a 200. **Not** `lastStatus = emptySeat ? 200 : 502`:
+              // that clause would downgrade an earlier zero-content 200 to 502.
+              if (emptySeat) lastStatus = 200;
+              else if (lastStatus !== 200) lastStatus = 502;
+              continue;
             }
           }
 
