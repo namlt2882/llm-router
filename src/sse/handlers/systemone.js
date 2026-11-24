@@ -5,13 +5,18 @@ import {
   extractApiKey,
   isValidApiKey,
 } from "../services/auth.js";
-import { getSettings } from "@/lib/localDb";
+import { getSettings, getCombos } from "@/lib/localDb";
 import { getModelInfo } from "../services/model.js";
-import { getKeyAccessContext, enforceKeyAccessResolved } from "../services/keyAccess.js";
+import { getKeyAccessContext, enforceKeyAccess } from "../services/keyAccess.js";
 import { handleSystemoneCore } from "open-sse/handlers/systemoneCore.js";
+import { handleComboChat, getComboModelsFromData } from "open-sse/services/combo.js";
+import { validateSystemoneAnswers } from "open-sse/handlers/systemoneShim.js";
 import { errorResponse, unavailableResponse } from "open-sse/utils/error.js";
 import { HTTP_STATUS } from "open-sse/config/runtimeConfig.js";
-import { releaseAccountSlot } from "../services/accountInflight.js";
+import { releaseAccountSlot, parsePriority } from "../services/accountInflight.js";
+import { orderFanoutAttempt } from "../services/fanoutModels.js";
+import { fanoutCtxForEntry } from "../services/fanoutBudget.js";
+import { resolveSessionIdentity } from "open-sse/utils/sessionManager.js";
 import * as log from "../utils/logger.js";
 import { checkAndRefreshToken } from "../services/tokenRefresh.js";
 import { saveRequestUsage } from "@/lib/usageDb.js";
@@ -70,6 +75,48 @@ export async function handleSystemone(request) {
     return errorResponse(HTTP_STATUS.BAD_REQUEST, "Missing required field: questions");
   }
 
+  // Combo expansion and the key gate come BEFORE getModelInfo: a combo name has
+  // no provider, so the old order (getModelInfo → Invalid model format 400)
+  // refused every combo request before any key check could run. Same order as
+  // the TTS handler.
+  const combos = await getCombos();
+  const comboModels = getComboModelsFromData(modelStr, combos);
+  const keyAccessDenied = await enforceKeyAccess(await getKeyAccessContext(request), modelStr);
+  if (keyAccessDenied) return keyAccessDenied;
+
+  if (comboModels) {
+    const comboStrategy = settings.comboStrategies?.[modelStr]?.fallbackStrategy || settings.comboStrategy || "fallback";
+    if (!["fallback", "round-robin", "fanout"].includes(comboStrategy)) {
+      return errorResponse(HTTP_STATUS.BAD_REQUEST, `Combo '${modelStr}': strategy '${comboStrategy}' is not supported for systemone combos`);
+    }
+    const fanoutCfg = fanoutCtxForEntry(settings.comboStrategies?.[modelStr]);
+    // image handler: `resolveSessionIdentity` needs a PLAIN headers object.
+    const sessionId = resolveSessionIdentity({ headers: Object.fromEntries(request.headers.entries()), body })?.sessionId || null;
+    const priority = parsePriority(request.headers);
+    const selection = { fanout: fanoutCfg, sessionId, priority, wait: true };
+    const { models: ordered, attemptOrdered } = await orderFanoutAttempt({
+      models: comboModels, comboName: modelStr, sessionId, fanoutCtx: fanoutCfg, getModelInfo,
+      attempt: (b, m) => handleSingleSystemone(b, m, request, apiKey, settings, selection),
+    });
+    return handleComboChat({
+      body, models: ordered, handleSingleModel: attemptOrdered, log, comboName: modelStr,
+      comboStrategy, comboStickyLimit: settings.comboStickyRoundRobinLimit, sessionId,
+      isUsable: (r) => Boolean(r?.answers) && validateSystemoneAnswers(body.questions, r.answers).ok,
+    });
+  }
+
+  return handleSingleSystemone(body, modelStr, request, apiKey, settings);
+}
+
+/**
+ * One non-combo member: resolve provider/model, run the credential fallback
+ * loop, call the core, record usage. `selection` carries the combo's fanout
+ * context so the member credential lookup honours the caller's budgets.
+ */
+async function handleSingleSystemone(body, modelStr, request, apiKey, settings, selection = null) {
+  const startedAt = Date.now();
+  const url = new URL(request.url);
+
   const modelInfo = await getModelInfo(modelStr);
   if (!modelInfo.provider) {
     log.warn("SYSTEMONE", "Invalid model format", { model: modelStr });
@@ -77,10 +124,6 @@ export async function handleSystemone(request) {
   }
 
   const { provider, model } = modelInfo;
-
-  // Per-key access control: checked before any credential lookup.
-  const keyAccessDenied = await enforceKeyAccessResolved(await getKeyAccessContext(request), modelStr, provider, model);
-  if (keyAccessDenied) return keyAccessDenied;
 
   if (modelStr !== `${provider}/${model}`) {
     log.info("ROUTING", `${modelStr} → ${provider}/${model}`);
@@ -94,7 +137,7 @@ export async function handleSystemone(request) {
   let lastStatus = null;
 
   while (true) {
-    const credentials = await getProviderCredentials(provider, excludeConnectionIds, model);
+    const credentials = await getProviderCredentials(provider, excludeConnectionIds, model, selection || undefined);
 
     // All accounts unavailable
     if (!credentials || credentials.allRateLimited) {
@@ -134,7 +177,10 @@ export async function handleSystemone(request) {
     }
 
     if (result.success) {
-      if (result.usage) {
+      // `usageRecorded` marks a shimmed member: handleChatCore already metered
+      // it — recording again would double-count the call. Native members set no
+      // such flag and keep today's path.
+      if (result.usage && !result.usageRecorded) {
         saveRequestUsage({
           provider,
           model,
