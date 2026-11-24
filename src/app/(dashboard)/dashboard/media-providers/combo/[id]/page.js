@@ -49,9 +49,20 @@ const EXAMPLE_BODIES = {
 // systemone combos answer only the three strategies that make sense for a
 // single-response protocol — smart/fusion are text-combo policies (Task 9
 // refuses them with a 400), so this page must not offer them.
-const STRATEGY_OPTIONS = [
+const SYSTEMONE_STRATEGY_OPTIONS = [
   { value: "fallback", label: "Fallback — try in order" },
   { value: "round-robin", label: "Round Robin — rotate" },
+  { value: "fanout", label: "Fanout — fan accounts by budget" },
+];
+
+// Same five values as the LLM combos page: image and webSearch ride
+// handleComboChat's full strategy set (fanout included). tts/webFetch keep the
+// Round-Robin toggle — no fanout wiring exists for them.
+const FULL_STRATEGY_OPTIONS = [
+  { value: "fallback", label: "Fallback — try in order" },
+  { value: "round-robin", label: "Round Robin — rotate" },
+  { value: "smart", label: "Smart Router — System One" },
+  { value: "fusion", label: "Fusion — panel + judge" },
   { value: "fanout", label: "Fanout — fan accounts by budget" },
 ];
 
@@ -310,7 +321,7 @@ export default function ComboDetailPage() {
             <Input label="Combo Name" value={name} onChange={(e) => { setName(e.target.value); validateName(e.target.value); }} onBlur={handleSaveName} error={nameError} />
             <p className="text-[10px] text-text-muted mt-0.5">Only letters, numbers, -, _ and .</p>
           </div>
-          {combo.kind === "systemone" ? (
+          {combo.kind === "systemone" || combo.kind === "image" || combo.kind === "webSearch" ? (
             <div className="flex items-center justify-between gap-3">
               <div>
                 <p className="text-sm font-medium">Strategy</p>
@@ -318,7 +329,7 @@ export default function ComboDetailPage() {
               </div>
               <div className="w-full sm:w-[240px]">
                 <Select
-                  options={STRATEGY_OPTIONS}
+                  options={combo.kind === "systemone" ? SYSTEMONE_STRATEGY_OPTIONS : FULL_STRATEGY_OPTIONS}
                   value={strategy}
                   onChange={(e) => handleSetStrategy(e.target.value)}
                 />
