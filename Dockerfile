@@ -96,6 +96,15 @@ RUN apk add --no-cache su-exec ffmpeg && \
   printf '#!/bin/sh\nchown -R node:node /app/data /app/data-home 2>/dev/null\nexec su-exec node "$@"\n' > /entrypoint.sh && \
   chmod +x /entrypoint.sh
 
+# npm and corepack ship a vendored node_modules of their own — npm 10.9.x
+# bundles undici 6.28.0 and brace-expansion 5.0.9 — and an image scan reports
+# every one of them as a shipped vulnerability of the image. The app's own tree
+# is clean (undici 7.30.2, brace-expansion 1.1.22 / 5.1.0); these two copies
+# live only under npm's own directory. Nothing in this container invokes npm at
+# runtime — the CMD below is bare `node` — so the npm CLI and corepack go with
+# their vendor trees. The builder stage keeps its npm.
+RUN rm -rf /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/corepack /usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/corepack
+
 EXPOSE 20128
 
 ENTRYPOINT ["/entrypoint.sh"]
